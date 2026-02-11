@@ -1,0 +1,202 @@
+# -*- coding: utf-8 -*-
+"""
+Created on Mon Jan 26 14:54:34 2026
+
+@author: kunal
+"""
+import os
+
+os.environ["OMP_NUM_THREADS"] = "1"
+os.environ["MKL_NUM_THREADS"] = "1"
+os.environ["OPENBLAS_NUM_THREADS"] = "1"
+os.environ["NUMEXPR_NUM_THREADS"] = "1"
+
+print('full_detector_workflow.py')
+print("OMP_NUM_THREADS =", os.environ.get("OMP_NUM_THREADS"))
+print("MKL_NUM_THREADS =", os.environ.get("MKL_NUM_THREADS"))
+print("OPENBLAS_NUM_THREADS =", os.environ.get("OPENBLAS_NUM_THREADS"))
+
+from detector_instrument_function import generate_detector_response
+from predicted_fusion_reactivity import dist_func_rz, fusion_reactivity_rz
+
+import time
+import numpy as np
+import matplotlib.pyplot as plt
+import multiprocessing as mp
+plt.rcParams.update({'font.size': 24})
+
+def detector_response_from_plasma(filenameEqdsk,
+                                  savenameReactivity,
+                                  
+                                  detPosArr,
+                                  detPhiArr,
+                                  detSizeArr,
+                                  bendRadArr,
+                                  tubeAngArr,
+                                  
+                                  rArr,
+                                  zArr,
+                                  nArr,
+                                  TeArr,
+                                  ZeffArr,
+                                  E_NBI,
+                                  theta_NBI,
+                                  timing=False):
+    
+    startTime = time.time()
+    
+    # Get the r-z evolved distribution functions
+    vPar, vPerp, zArr2D, rArr2D, f_rz = dist_func_rz(rArr, zArr, nArr, TeArr, ZeffArr, E_NBI, theta_NBI, mu_i=2, filenameEqdsk=filenameEqdsk)
+    
+    # Get the r-z evolved fusion reactivity profile
+    zArr2D, rArr2D, reactivity2D = fusion_reactivity_rz(vPar, vPerp, zArr2D, rArr2D, f_rz, 
+                                                        makeplot=False,
+                                                        savename=savenameReactivity)
+    
+    reactivityTime = time.time()
+    if timing == True:
+        print(f'Time taken to generate a reactivity profile = {np.round(reactivityTime-startTime, 2)}s')
+    
+    # Calculate the detector response function
+    detResponse = generate_detector_response(filenameEqdsk, savenameReactivity, detPosArr, detPhiArr, detSizeArr, bendRadArr, tubeAngArr,
+                                               makeplot=False)
+    
+    # Assume poisson stastics to get the standard deviation of the detector response
+    detResponseStd = np.sqrt(detResponse)
+    
+    detectorTime = time.time()
+    if timing == True:
+        print(f'Time taken to generate the detector response = {np.round(detectorTime-reactivityTime, 2)}s')
+    
+    return detResponse, detResponseStd
+
+if __name__ == '__main__':
+
+    # =========================================================================
+    # Path to the eqdsk file
+    # =========================================================================
+    
+    filenameEqdsk='/home/sanwalka/synthetic_proton_detector/eqdsk/wham_hts_eqdsk_for_kunal'
+    
+    # =========================================================================
+    # Save data directory
+    # =========================================================================
+    
+    saveDir = '/home/sanwalka/synthetic_proton_detector/reactivity/'
+    
+    # =========================================================================
+    # Define the detector array geometry
+    # =========================================================================
+
+    # The detectors are evenly spaced on the boxport
+    zPosArr = np.arange(0.362, 0.665, 2*2.54/1e2) # 2in apart on the boxport
+    # zPosArr = np.array([0.5])
+    xPos = -0.257
+    yPos = 0.307
+    detPosArr = np.array([[xPos, yPos, zPos] for zPos in zPosArr]) # meters
+    
+    # Detector angles
+    detPhiArr = np.full(len(zPosArr), (np.pi/180) * (270)) # radians
+    # Optimized angles
+    detPhiArr = np.array([282, 278, 275, 271, 264, 258]) * (np.pi/180)
+    
+    # Detector sizes
+    detSizeArr = np.full(len(zPosArr), (np.pi*0.5*0.5) / 1550) # m^2
+    
+    # Tube bend radii
+    bendRadArr = np.full(len(zPosArr), 0.3) # meters
+    
+    # Tube sector angle
+    tubeAngArr = np.full(len(zPosArr), 20 * np.pi/180) # radians
+    
+    # =========================================================================
+    # Define the plasma parameters
+    # =========================================================================
+    
+    # Radial values at the midplane for the distribution function
+    rArr = np.linspace(0, 0.1, 20)
+    
+    # Axial positions
+    zArr = np.linspace(0, 0.8, 40)
+    
+    # Radial n_e profile
+    nArr = np.full(np.shape(rArr), 1e19)
+    
+    # Radial T_e profile
+    TeArr = np.full(np.shape(rArr), 0.1)
+    
+    # Radial Z_eff profile
+    ZeffArr = np.full(np.shape(rArr), 2)
+    
+    # NBI energy
+    E_NBI = 25
+    
+    # NBI injection angle
+    theta_NBI = np.pi/4
+    
+    # =========================================================================
+    # Run the same script 10 times to see run-to-run variations in the detector response
+    # =========================================================================
+    
+    detResponseScan = []
+    
+    for i in range(10):
+        
+        print('*****************************')
+        print(f'{i+1} of 10')
+        print('*****************************')
+
+        savenameReactivity = saveDir + f'run_{i}_reactivity.npz'
+        
+        detResponseArr, _ = detector_response_from_plasma(filenameEqdsk, savenameReactivity, 
+                                                       
+                                                                       detPosArr, 
+                                                                       detPhiArr, 
+                                                                       detSizeArr, 
+                                                                       bendRadArr, 
+                                                                       tubeAngArr, 
+                                                                       
+                                                                       rArr, 
+                                                                       zArr, 
+                                                                       nArr, 
+                                                                       TeArr, 
+                                                                       ZeffArr, 
+                                                                       E_NBI, 
+                                                                       theta_NBI,
+                                                       
+                                                                       timing=True)
+        
+        detResponseScan.append(detResponseArr)
+    detResponseScan = np.array(detResponseScan)
+   
+    # Get the average and standard deviation of the detector response across the 10 runs
+    detResponseMean = np.mean(detResponseScan, axis=0)
+    detResponseStd = np.std(detResponseScan, axis=0)
+
+    fig = plt.figure(figsize=(12, 8), tight_layout=True)
+    ax = fig.add_subplot(111)
+    
+    ax.errorbar(detPosArr[:, 2], detResponseMean/1e3, yerr=detResponseStd/1e3, 
+                fmt='o', 
+                markersize=10, 
+                linewidth=3, 
+                label='Mean ± Std Dev')
+    ax.plot(detPosArr[:, 2], detResponseMean/1e3, 
+            linewidth=3)
+    
+    # for i in range(10):
+        
+    #     ax.plot(detPosArr[:, 2], detResponseScan[i]/1e3, 
+    #             linewidth = 3,
+    #             label=r'Run '+f'{i+1}')
+    #             # label=r'E$_{NBI}$='+f'{E_NBI[i]}keV')
+    #     ax.scatter(detPosArr[:, 2], detResponseScan[i]/1e3, 
+    #                s = 300)
+        
+    ax.legend()
+    ax.set_xlabel('Z [m]')
+    ax.set_ylabel('Counts/ms')
+    ax.set_ylim(0, None)
+    
+    plt.show()
+    
