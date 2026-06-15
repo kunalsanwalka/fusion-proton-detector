@@ -76,20 +76,20 @@ if __name__ == '__main__':
     # Path to the eqdsk file
     # =========================================================================
     
-    filenameEqdsk='/home/WHAMdata/synthetic_proton_detector/eqdsk/wham_hts_eqdsk_for_kunal'
+    filenameEqdsk='/home/sanwalka/synthetic_proton_detector/eqdsk/wham_hts_eqdsk_for_kunal'
     
     # =========================================================================
     # Save data directory
     # =========================================================================
     
-    saveDir = '/home/WHAMdata/synthetic_proton_detector/reactivity/'
+    saveDir = '/home/sanwalka/synthetic_proton_detector/reactivity/'
     
     # =========================================================================
     # Define the detector array geometry
     # =========================================================================
 
     # The detectors are evenly spaced on the boxport
-    zPosArr = np.arange(0.362, 0.665, 2*2.54/1e2) # 2in apart on the boxport
+    zPosArr = np.arange(0.362, 0.665, 2*2.54/1e2) # 2 in apart on the boxport
     # zPosArr = np.array([0.5])
     xPos = -0.257
     yPos = 0.307
@@ -149,26 +149,26 @@ if __name__ == '__main__':
         savenameReactivity = saveDir + f'run_{i}_reactivity.npz'
         
         detResponseArr, _ = detector_response_from_plasma(filenameEqdsk, savenameReactivity, 
-                                                       
-                                                                       detPosArr, 
-                                                                       detPhiArr, 
-                                                                       detSizeArr, 
-                                                                       bendRadArr, 
-                                                                       tubeAngArr, 
+                                                          
+                                                          detPosArr, 
+                                                          detPhiArr, 
+                                                          detSizeArr, 
+                                                          bendRadArr, 
+                                                          tubeAngArr, 
                                                                        
-                                                                       rArr, 
-                                                                       zArr, 
-                                                                       nArr, 
-                                                                       TeArr, 
-                                                                       ZeffArr, 
-                                                                       E_NBI, 
-                                                                       theta_NBI,
-                                                       
-                                                                       timing=True)
+                                                          rArr, 
+                                                          zArr, 
+                                                          nArr, 
+                                                          TeArr, 
+                                                          ZeffArr, 
+                                                          E_NBI, 
+                                                          theta_NBI,
+                                                          
+                                                          timing=True)
         
         detResponseScan.append(detResponseArr)
     detResponseScan = np.array(detResponseScan)
-   
+    
     # Get the average and standard deviation of the detector response across the 10 runs
     detResponseMean = np.mean(detResponseScan, axis=0)
     detResponseStd = np.std(detResponseScan, axis=0)
@@ -192,7 +192,7 @@ if __name__ == '__main__':
     #             # label=r'E$_{NBI}$='+f'{E_NBI[i]}keV')
     #     ax.scatter(detPosArr[:, 2], detResponseScan[i]/1e3, 
     #                s = 300)
-        
+    
     ax.legend()
     ax.set_xlabel('Z [m]')
     ax.set_ylabel('Counts/ms')

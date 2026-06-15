@@ -18,15 +18,11 @@ os.environ["MKL_NUM_THREADS"] = "1"
 os.environ["OPENBLAS_NUM_THREADS"] = "1"
 os.environ["NUMEXPR_NUM_THREADS"] = "1"
 
-print('detetector_instrument_function.py')
-print("OMP_NUM_THREADS =", os.environ.get("OMP_NUM_THREADS"))
-print("MKL_NUM_THREADS =", os.environ.get("MKL_NUM_THREADS"))
-print("OPENBLAS_NUM_THREADS =", os.environ.get("OPENBLAS_NUM_THREADS"))
-
 import subprocess
 import csv
 import time
 import random
+import pickle
 import numpy as np
 import scipy as sc
 import scipy.constants as const
@@ -37,7 +33,9 @@ from scipy.spatial.transform import Rotation as R
 from random_geometry_points.plane import Plane
 from multiprocessing import Pool, cpu_count
 from functools import partial
-plt.rcParams.update({'font.size': 14})
+
+plt.rcParams.update({'font.size': 22})
+plt.switch_backend('TkAgg')
 
 def charge_to_mass_ratio(species):
     """
@@ -345,18 +343,18 @@ def integrand_relativistic(t,y,species='D'):
                dvdt[5]=az
     """
     
-    #Positions
-    xPos=y[0]
-    yPos=y[1]
-    zPos=y[2]
+    # Positions
+    xPos = y[0]
+    yPos = y[1]
+    zPos = y[2]
     
-    #Velocities
-    vx=y[3]
-    vy=y[4]
-    vz=y[5]
+    # Velocities
+    vx = y[3]
+    vy = y[4]
+    vz = y[5]
     
     # Convert x,y to cylindrical
-    r = np.sqrt(xPos**2+yPos**2)
+    r = np.sqrt(xPos**2 + yPos**2)
     
     # Try-except block since the particle can go beyond the range of the
     # generated eqdsk. If this were to happen to a real particle it would have
@@ -376,20 +374,20 @@ def integrand_relativistic(t,y,species='D'):
         Bx = 0
         By = 0
     
-    #Charge to mass ratio
-    qm=charge_to_mass_ratio(species)
+    # Charge to mass ratio
+    qm = charge_to_mass_ratio(species)
     
-    #Gamma factor
-    gamma=1/np.sqrt(1-((vx**2+vy**2+vz**2)/const.c**2))
+    # Gamma factor
+    gamma = 1/np.sqrt(1-((vx**2+vy**2+vz**2)/const.c**2))
     
-    #Calculate acceleration
+    # Calculate acceleration
     dvdt = np.zeros(6)
-    dvdt[0]=vx
-    dvdt[1]=vy
-    dvdt[2]=vz
-    dvdt[3]=gamma*qm*(vy*Bz-vz*By) # ax
-    dvdt[4]=gamma*qm*(vz*Bx-vx*Bz) # ay
-    dvdt[5]=gamma*qm*(vx*By-vy*Bx) # az
+    dvdt[0] = vx
+    dvdt[1] = vy
+    dvdt[2] = vz
+    dvdt[3] = gamma*qm*(vy*Bz-vz*By) # ax
+    dvdt[4] = gamma*qm*(vz*Bx-vx*Bz) # ay
+    dvdt[5] = gamma*qm*(vx*By-vy*Bx) # az
     
     return dvdt
 
@@ -553,6 +551,8 @@ def generate_tracks_detector(detPos, detSize, detTheta, detPhi,
         Data on the state vector for each fusion proton.
     """
     
+    startTime = time.time()
+
     # Initial energy
     energy = fusion_energy(species)
     
@@ -589,37 +589,42 @@ def generate_tracks_detector(detPos, detSize, detTheta, detPhi,
     # Get the particle tracks
     particleTracks = []
     
-    #Particle number
-    particleNum=1
+    # Particle number
+    particleNum = 1
     
-    #Go over each point
+    setupTime = time.time()
+    print('Time taken to set up track generation- '+str(setupTime-startTime)+' seconds')
+
+    # Go over each point
     for point in planePoints:
         
-        #Random perturbations per point
+        # Random perturbations per point
         for i in range(numLaunchesPerPos):
         
-            #Random theta perturbation
-            thetaPer=random.uniform(-1,1)*acceptAng #radians
-            #Random phi perturbation
-            phiPer=random.uniform(-1,1)*np.sqrt(acceptAng**2-thetaPer**2)
+            # Random theta perturbation
+            thetaPer = random.uniform(-1,1) * acceptAng # [radians]
+            # Random phi perturbation
+            phiPer = random.uniform(-1,1) * np.sqrt(acceptAng**2 - thetaPer**2)
             
-            #Launch theta
-            thetaLaunch=detTheta+thetaPer
-            #Launch phi
-            phiLaunch=detPhi+phiPer
+            # Launch theta
+            thetaLaunch = detTheta + thetaPer
+            # Launch phi
+            phiLaunch = detPhi + phiPer
             
-            #Print the track number
-            # print('Generating track number- '+str(particleNum))
-            #Increment
-            particleNum+=1
+            # Increment
+            particleNum += 1
             
-            #Single particle track
-            stateVec=single_particle_track(xIni=point,energy=energy,theta=thetaLaunch,phi=phiLaunch,species=species)
+            # Single particle track
+            stateVec = single_particle_track(xIni = point,
+                                             energy = energy,
+                                             theta = thetaLaunch,
+                                             phi = phiLaunch,
+                                             species = species)
             
             particleTracks.append(stateVec)
             
-    #Convert to numpy
-    particleTracks=np.array(particleTracks)
+    # Convert to numpy
+    particleTracks = np.array(particleTracks)
     
     if makeplot==True:
         
@@ -707,11 +712,14 @@ def generate_tracks_detector(detPos, detSize, detTheta, detPhi,
         
         plt.show()
     
+    endTime = time.time()
+    print('Time taken to generate tracks in generate_tracks_detector '+str(endTime-startTime)+' seconds')
+
     return particleTracks
 
 def generate_tracks_aperture(detPos, detPhi, detSize, bendRad, tubeAng,
                              species='H', numLaunchPos=20, numLaunchesPerPos=20,
-                             makeplot=False, saveplot=False):
+                             makeplot=False, saveplot=False, savename=None):
     """
     This function calculates the particle tracks that hit the detector and pass
     through the given aperture geometry.
@@ -751,6 +759,9 @@ def generate_tracks_aperture(detPos, detPhi, detSize, bendRad, tubeAng,
         Make a plot of the data.
     saveplot : boolean, optional
         Save the plot.
+    savename : string, optional
+        Name of the .pkl file to save the (x,y) of the particle tracks that pass through the aperture.
+        Default = None (does not save).
 
     Returns
     -------
@@ -767,29 +778,34 @@ def generate_tracks_aperture(detPos, detPhi, detSize, bendRad, tubeAng,
     # Theta (angle wrt z axis)  ***DO NOT CHANGE***
     detTheta = (np.pi/180) * 90 # radians
 
-    #Length of chord from tube opening to detector (law of cosines)
-    chordLen=bendRad*np.sqrt(2*(1-np.cos(tubeAng)))
+    # Length of chord from tube opening to detector (law of cosines)
+    chordLen = bendRad * np.sqrt(2*(1-np.cos(tubeAng)))
 
-    #Place the detector 1 chord length from the origin
-    localPos=np.array([chordLen,0,0])
+    # Place the detector 1 chord length from the origin
+    localPos = np.array([chordLen,0,0])
 
-    #Net angle by which we need to rotate the opening positon
-    netAng=detPhi+tubeAng
+    # Net angle by which we need to rotate the opening positon
+    netAng = detPhi + tubeAng
 
-    #Rotation matrix (-ve angle since we are rotating the point and not the axes)
-    rotMatrix=np.array([[np.cos(-netAng),np.sin(-netAng)],[-np.sin(-netAng),np.cos(-netAng)]])
+    # Rotation matrix (-ve angle since we are rotating the point and not the axes)
+    rotMatrix = np.array([[np.cos(-netAng),np.sin(-netAng)],
+                          [-np.sin(-netAng),np.cos(-netAng)]])
 
-    #Rotate the opening position
-    localPos[:2]=np.matmul(rotMatrix,localPos[:2])
+    # Rotate the opening position
+    localPos[:2] = np.matmul(rotMatrix,localPos[:2])
 
-    #Go from local to global coordinates
-    adjustedPos=localPos+detPos
+    # Go from local to global coordinates
+    adjustedPos = localPos + detPos
 
-    #Normal vector of the detector
-    detNorm=np.array([np.sin(detTheta)*np.cos(detPhi),np.sin(detTheta)*np.sin(detPhi),np.cos(detTheta)])
+    # Normal vector of the detector
+    detNorm = np.array([np.sin(detTheta)*np.cos(detPhi),
+                        np.sin(detTheta)*np.sin(detPhi),
+                        np.cos(detTheta)])
 
-    #Normal vector of the opening
-    openNorm=np.array([np.sin(detTheta)*np.cos(netAng),np.sin(detTheta)*np.sin(netAng),np.cos(detTheta)])
+    # Normal vector of the opening
+    openNorm = np.array([np.sin(detTheta)*np.cos(netAng),
+                         np.sin(detTheta)*np.sin(netAng),
+                         np.cos(detTheta)])
 
     # =============================================================================
     # Generate the particle tracks
@@ -799,9 +815,14 @@ def generate_tracks_aperture(detPos, detPhi, detSize, bendRad, tubeAng,
     species='H'
 
     # Get the particle tracks
+    startTime = time.time()
+
     particleTracks=generate_tracks_detector(detPos, detSize, detTheta, detPhi,
                                             species=species, acceptAng=(np.pi/180)*15,
                                             numLaunchPos=numLaunchPos, numLaunchesPerPos=numLaunchesPerPos)
+    
+    generationTime = time.time()
+    print('Time taken to generate tracks- '+str(generationTime-startTime)+' seconds')
 
     # =============================================================================
     # Analysis
@@ -844,6 +865,18 @@ def generate_tracks_aperture(detPos, detPhi, detSize, bendRad, tubeAng,
         if detectorHit == True:
             openingTracks.append(currTrack)
             
+    # Save the (x,z) of the tracks that go through the opening
+    if savename != None:
+
+        # Get the (x,z) of the tracks that go through the opening
+        xzTracks = []
+        for track in openingTracks:
+            xzTracks.append([track[0], track[1]])
+        
+        # Save the (x,z) of the tracks that go through the opening
+        with open(savename, 'wb') as f:
+            pickle.dump(xzTracks, f)
+
     # =============================================================================
     # Plotting
     # =============================================================================
@@ -1184,14 +1217,14 @@ def generate_tracks_aperture(detPos, detPhi, detSize, bendRad, tubeAng,
                 ax.set_title('XY Plane')
                 
                 #Zoom in to make plots clearer
-                ax.set_xlim(-0.3,0.3)
-                ax.set_ylim(-0.3,0.3)
+                ax.set_xlim(-0.4,0.4)
+                ax.set_ylim(-0.4,0.4)
                 
                 ax.legend()
                 ax.grid(True)
                 
             #Plot title
-            fig.suptitle(r'$\theta$='+str(int(detTheta*180/np.pi))+r'$^{\circ}$; $\phi$='+str(int(detPhi*180/np.pi))+r'$^{\circ}$'+
+            fig.suptitle(r'$\phi$='+str(int(detPhi*180/np.pi))+r'$^{\circ}$'+
                          r'; Bend Radius= '+str(bendRad)+'m; Tube Section= '+str(int(tubeAng*180/np.pi))+r'$^{\circ}$')
 
         # =============================================================================
@@ -1199,14 +1232,15 @@ def generate_tracks_aperture(detPos, detPhi, detSize, bendRad, tubeAng,
         # =============================================================================
         if saveplot == True:
 
-            #Get the name of the eqdsk file
-            ncName=filenameEqdsk.split('/')[-1]
+            # Get the name of the eqdsk file
+            ncName = filenameEqdsk.split('/')[-1]
     
-            #Generate the savename
-            savename=ncName+'_proton_detector_r_'+str(int(detPos[0]*100))+'cm_z_'+str(int(detPos[2]*100))+'cm_theta_'+str(int(detTheta*180/np.pi))+'deg_phi_'+str(int(detPhi*180/np.pi))+'deg_with_collimator.png'
+            # Generate the savename
+            savename = ncName+'_proton_detector_r_'+str(int(detPos[0]*100))+'cm_z_'+str(int(detPos[2]*100))+'cm_theta_'+str(int(detTheta*180/np.pi))+'deg_phi_'+str(int(detPhi*180/np.pi))+'deg_with_collimator.png'
     
-            #Save the plot
-            plt.savefig(plotDest+'Proton Detector/Positions/'+savename, bbox_inches='tight')
+            print(savename)
+            plt.savefig('/home/sanwalka/synthetic_proton_detector/plots/' + savename + '.png', 
+                        bbox_inches='tight')
 
             plt.close()
         
@@ -1214,11 +1248,14 @@ def generate_tracks_aperture(detPos, detPhi, detSize, bendRad, tubeAng,
             
             plt.show()
     
+    endTime = time.time()
+    print('Time taken to analyze and plot tracks- '+str(endTime-generationTime)+' seconds')
+
     return openingTracks
 
 def volume_weights(detPos, detPhi, detSize, bendRad, tubeAng, 
                    cellSize=1e-2, errorLim=1e-2, maxParticles=200,
-                   makeplot=False):
+                   makeplot=False, savename=None):
     """
     This function calculates the instrument function for a given detector 
     geometry. It also calculates the distance between the detector aperture and 
@@ -1247,10 +1284,15 @@ def volume_weights(detPos, detPhi, detSize, bendRad, tubeAng,
     errorLim : float, optional
         Error limit before the simulation is considered to have converged.
         The default is 1e-2.
+        If set to None, then the simulation will only stop when maxParticles is reached.
     maxParticles : float, optional
         Maximum number of particles to be launched by the simulation before it
         exits.
         The default is 200.
+    makeplot : boolean, optional
+        Make a plot of the data. Default is False.
+    savename : string, optional
+        Save the data that is being plotted. Default is None.
 
     Returns
     -------
@@ -1293,108 +1335,250 @@ def volume_weights(detPos, detPhi, detSize, bendRad, tubeAng,
     # Launch particles until the error rate is below errorLim or the maximum
     # number of particles is reached
     i = 0 # Track number of iterations through the loop
-    while currError >= errorLim and totParticles[-1] <= maxParticles:
-        
-        startTime = time.time()
-        
-        # Old volume weights to track error
-        oldVolumeWeights = np.copy(volumeWeights)
-        
-        # Generate particle tracks given the detector geometry
-        openingTracks = generate_tracks_aperture(detPos=detPos, 
-                                                 detPhi=detPhi, 
-                                                 detSize=detSize, 
-                                                 bendRad=bendRad, 
-                                                 tubeAng=tubeAng,
-                                                 numLaunchPos=5,
-                                                 numLaunchesPerPos=5,
-                                                 makeplot=False)
-        
-        tracksGenerationTime = time.time()
-        # print(f'Time taken to generate tracks= {tracksGenerationTime - startTime}s')
 
-        # Go over each particle track and see which volume elements it went through
-        chunk_size = 10000  # Process grid points in chunks to avoid huge memory usage
+    # If errorLim is None, then we only stop when maxParticles is reached
+    if errorLim != None:
+
+        while currError >= errorLim and totParticles[-1] <= maxParticles:
         
-        for j in range(len(openingTracks)):
+            startTime = time.time()
             
-            currTrack = openingTracks[j][:3]  # Only keep the position data (3, num_positions)
-            all_positions = currTrack.T  # shape: (num_positions, 3)
-            num_positions = all_positions.shape[0]
+            # Old volume weights to track error
+            oldVolumeWeights = np.copy(volumeWeights)
             
-            # Calculate cumulative distance along track for each position
-            # distances[i] = total distance from detector (position 0) to position i
-            if num_positions > 1:
-                # Distance between consecutive positions
-                deltas = np.diff(all_positions, axis=0)  # (num_positions-1, 3)
-                segment_lengths = np.linalg.norm(deltas, axis=1)  # (num_positions-1,)
-                # Cumulative distance from start
-                cumulative_dist = np.concatenate([[0], np.cumsum(segment_lengths)])  # (num_positions,)
-            else:
-                cumulative_dist = np.array([0])
+            # Generate particle tracks given the detector geometry
+            openingTracks = generate_tracks_aperture(detPos=detPos, 
+                                                     detPhi=detPhi, 
+                                                     detSize=detSize, 
+                                                     bendRad=bendRad, 
+                                                     tubeAng=tubeAng,
+                                                     numLaunchPos=5,
+                                                     numLaunchesPerPos=5,
+                                                     makeplot=False)
             
-            # Process grid points in chunks
-            num_grid_points = len(threeDPoints)
+            tracksGenerationTime = time.time()
+            print(f'Time taken to generate tracks= {tracksGenerationTime - startTime}s')
+
+            # Go over each particle track and see which volume elements it went through
+            chunk_size = 10000  # Process grid points in chunks to avoid huge memory usage
             
-            for chunk_start in range(0, num_grid_points, chunk_size):
-                chunk_end = min(chunk_start + chunk_size, num_grid_points)
-                grid_chunk = threeDPoints[chunk_start:chunk_end]  # (chunk_size, 3)
+            for j in range(len(openingTracks)):
                 
-                # Reshape for broadcasting:
-                # grid_chunk: (chunk_size, 3) -> (chunk_size, 1, 3)
-                # all_positions: (num_positions, 3) -> (1, num_positions, 3)
-                grid_reshaped = grid_chunk[:, np.newaxis, :]
-                positions_reshaped = all_positions[np.newaxis, :, :]
+                currTrack = openingTracks[j][:3]  # Only keep the position data (3, num_positions)
+                all_positions = currTrack.T  # shape: (num_positions, 3)
+                num_positions = all_positions.shape[0]
                 
-                # Calculate distances for this chunk
-                # Result shape: (chunk_size, num_positions, 3)
-                distances = np.abs(grid_reshaped - positions_reshaped)
+                # Calculate cumulative distance along track for each position
+                # distances[i] = total distance from detector (position 0) to position i
+                if num_positions > 1:
+                    # Distance between consecutive positions
+                    deltas = np.diff(all_positions, axis=0)  # (num_positions-1, 3)
+                    segment_lengths = np.linalg.norm(deltas, axis=1)  # (num_positions-1,)
+                    # Cumulative distance from start
+                    cumulative_dist = np.concatenate([[0], np.cumsum(segment_lengths)])  # (num_positions,)
+                else:
+                    cumulative_dist = np.array([0])
                 
-                # Find which grid points are within half cell size for each position
-                # Shape: (chunk_size, num_positions)
-                within_range = np.all(distances <= 0.5 * cellSize, axis=2)
+                # Process grid points in chunks
+                num_grid_points = len(threeDPoints)
                 
-                # For each grid point, find if it was hit and at which position index
-                hit_mask = np.any(within_range, axis=1)  # (chunk_size,) - which points were hit
-                
-                # For hit points, find the FIRST position that hit them
-                first_hit_indices = np.full(len(grid_chunk), -1, dtype=int)
-                first_hit_indices[hit_mask] = np.argmax(within_range[hit_mask], axis=1)
-                
-                # Update volumeWeights and volumeDistances
-                global_indices = np.arange(chunk_start, chunk_end)
-                hit_global_indices = global_indices[hit_mask]
-                hit_position_indices = first_hit_indices[hit_mask]
-                
-                # Increment weights
-                volumeWeights[hit_global_indices] += 1
-                
-                # Update distances (use the cumulative distance at the hit position)
-                volumeDistances[hit_global_indices] = cumulative_dist[hit_position_indices]
+                for chunk_start in range(0, num_grid_points, chunk_size):
+                    chunk_end = min(chunk_start + chunk_size, num_grid_points)
+                    grid_chunk = threeDPoints[chunk_start:chunk_end]  # (chunk_size, 3)
                     
-        # Update the error
-        if len(openingTracks) > 0:
-            
-            currError = np.sum(volumeWeights - oldVolumeWeights)/np.sum(volumeWeights)
-            
-            errorArr.append(currError)
-            totParticles.append(totParticles[-1] + len(openingTracks))
-            
-            # print('Error = {}'.format(currError))
-            # print('Particle Number = {}'.format(totParticles[-1]))
-            
-        volumeTrackingTime = time.time()
-        # print(f'Time taken to check volumes = {volumeTrackingTime - tracksGenerationTime}s')
-            
-        i+=1
+                    # Reshape for broadcasting:
+                    # grid_chunk: (chunk_size, 3) -> (chunk_size, 1, 3)
+                    # all_positions: (num_positions, 3) -> (1, num_positions, 3)
+                    grid_reshaped = grid_chunk[:, np.newaxis, :]
+                    positions_reshaped = all_positions[np.newaxis, :, :]
+                    
+                    # Calculate distances for this chunk
+                    # Result shape: (chunk_size, num_positions, 3)
+                    distances = np.abs(grid_reshaped - positions_reshaped)
+                    
+                    # Find which grid points are within half cell size for each position
+                    # Shape: (chunk_size, num_positions)
+                    within_range = np.all(distances <= 0.5 * cellSize, axis=2)
+                    
+                    # For each grid point, find if it was hit and at which position index
+                    hit_mask = np.any(within_range, axis=1)  # (chunk_size,) - which points were hit
+                    
+                    # For hit points, find the FIRST position that hit them
+                    first_hit_indices = np.full(len(grid_chunk), -1, dtype=int)
+                    first_hit_indices[hit_mask] = np.argmax(within_range[hit_mask], axis=1)
+                    
+                    # Update volumeWeights and volumeDistances
+                    global_indices = np.arange(chunk_start, chunk_end)
+                    hit_global_indices = global_indices[hit_mask]
+                    hit_position_indices = first_hit_indices[hit_mask]
+                    
+                    # Increment weights
+                    volumeWeights[hit_global_indices] += 1
+                    
+                    # Update distances (use the cumulative distance at the hit position)
+                    volumeDistances[hit_global_indices] = cumulative_dist[hit_position_indices]
+                        
+            # Update the error
+            if len(openingTracks) > 0:
+                
+                currError = np.sum(volumeWeights - oldVolumeWeights)/np.sum(volumeWeights)
+                
+                errorArr.append(currError)
+                totParticles.append(totParticles[-1] + len(openingTracks))
+                
+                # print('Error = {}'.format(currError))
+                # print('Particle Number = {}'.format(totParticles[-1]))
+                
+            volumeTrackingTime = time.time()
+            print(f'Time taken to check volumes = {volumeTrackingTime - tracksGenerationTime}s')
+                
+            i+=1
+    
+    else:
+
+        while totParticles[-1] <= maxParticles:
         
+            startTime = time.time()
+            
+            # Old volume weights to track error
+            oldVolumeWeights = np.copy(volumeWeights)
+            
+            # Generate particle tracks given the detector geometry
+            openingTracks = generate_tracks_aperture(detPos=detPos, 
+                                                    detPhi=detPhi, 
+                                                    detSize=detSize, 
+                                                    bendRad=bendRad, 
+                                                    tubeAng=tubeAng,
+                                                    numLaunchPos=5,
+                                                    numLaunchesPerPos=5,
+                                                    makeplot=False)
+            
+            tracksGenerationTime = time.time()
+            print(f'Time taken to generate tracks= {tracksGenerationTime - startTime}s')
+
+            # Go over each particle track and see which volume elements it went through
+            chunk_size = 10000  # Process grid points in chunks to avoid huge memory usage
+            
+            for j in range(len(openingTracks)):
+                
+                currTrack = openingTracks[j][:3]  # Only keep the position data (3, num_positions)
+                all_positions = currTrack.T  # shape: (num_positions, 3)
+                num_positions = all_positions.shape[0]
+                
+                # Calculate cumulative distance along track for each position
+                # distances[i] = total distance from detector (position 0) to position i
+                if num_positions > 1:
+                    # Distance between consecutive positions
+                    deltas = np.diff(all_positions, axis=0)  # (num_positions-1, 3)
+                    segment_lengths = np.linalg.norm(deltas, axis=1)  # (num_positions-1,)
+                    # Cumulative distance from start
+                    cumulative_dist = np.concatenate([[0], np.cumsum(segment_lengths)])  # (num_positions,)
+                else:
+                    cumulative_dist = np.array([0])
+                
+                # Process grid points in chunks
+                num_grid_points = len(threeDPoints)
+                
+                for chunk_start in range(0, num_grid_points, chunk_size):
+                    chunk_end = min(chunk_start + chunk_size, num_grid_points)
+                    grid_chunk = threeDPoints[chunk_start:chunk_end]  # (chunk_size, 3)
+                    
+                    # Reshape for broadcasting:
+                    # grid_chunk: (chunk_size, 3) -> (chunk_size, 1, 3)
+                    # all_positions: (num_positions, 3) -> (1, num_positions, 3)
+                    grid_reshaped = grid_chunk[:, np.newaxis, :]
+                    positions_reshaped = all_positions[np.newaxis, :, :]
+                    
+                    # Calculate distances for this chunk
+                    # Result shape: (chunk_size, num_positions, 3)
+                    distances = np.abs(grid_reshaped - positions_reshaped)
+                    
+                    # Find which grid points are within half cell size for each position
+                    # Shape: (chunk_size, num_positions)
+                    within_range = np.all(distances <= 0.5 * cellSize, axis=2)
+                    
+                    # For each grid point, find if it was hit and at which position index
+                    hit_mask = np.any(within_range, axis=1)  # (chunk_size,) - which points were hit
+                    
+                    # For hit points, find the FIRST position that hit them
+                    first_hit_indices = np.full(len(grid_chunk), -1, dtype=int)
+                    first_hit_indices[hit_mask] = np.argmax(within_range[hit_mask], axis=1)
+                    
+                    # Update volumeWeights and volumeDistances
+                    global_indices = np.arange(chunk_start, chunk_end)
+                    hit_global_indices = global_indices[hit_mask]
+                    hit_position_indices = first_hit_indices[hit_mask]
+                    
+                    # Increment weights
+                    volumeWeights[hit_global_indices] += 1
+                    
+                    # Update distances (use the cumulative distance at the hit position)
+                    volumeDistances[hit_global_indices] = cumulative_dist[hit_position_indices]
+                        
+            # Update the error
+            if len(openingTracks) > 0:
+                
+                currError = np.sum(volumeWeights - oldVolumeWeights)/np.sum(volumeWeights)
+                
+                errorArr.append(currError)
+                totParticles.append(totParticles[-1] + len(openingTracks))
+                
+                # print('Error = {}'.format(currError))
+                # print('Particle Number = {}'.format(totParticles[-1]))
+                
+            volumeTrackingTime = time.time()
+            print(f'Time taken to check volumes = {volumeTrackingTime - tracksGenerationTime}s')
+                
+            i+=1
+
     print(f'Number of loop iterations = {i}')
+    print(f'Final error = {currError}')
+    print(f'Total number of particles launched = {totParticles[-1]}')
         
     # Normalize the volume weights
     volumeWeights /= np.max(volumeWeights)
     
     if makeplot == True:
         
+        # =============================================================================
+        # Calculate the position/orientation of the tube opening
+        # =============================================================================
+
+        # Theta (angle wrt z axis)  ***DO NOT CHANGE***
+        detTheta = (np.pi/180) * 90 # radians
+
+        # Length of chord from tube opening to detector (law of cosines)
+        chordLen = bendRad * np.sqrt(2*(1-np.cos(tubeAng)))
+
+        # Place the detector 1 chord length from the origin
+        localPos = np.array([chordLen,0,0])
+
+        # Net angle by which we need to rotate the opening positon
+        netAng = detPhi + tubeAng
+
+        # Rotation matrix (-ve angle since we are rotating the point and not the axes)
+        rotMatrix = np.array([[np.cos(-netAng),np.sin(-netAng)],
+                                [-np.sin(-netAng),np.cos(-netAng)]])
+
+        # Rotate the opening position
+        localPos[:2] = np.matmul(rotMatrix,localPos[:2])
+
+        # Go from local to global coordinates
+        adjustedPos = localPos + detPos
+
+        # Normal vector of the detector
+        detNorm = np.array([np.sin(detTheta)*np.cos(detPhi),
+                            np.sin(detTheta)*np.sin(detPhi),
+                            np.cos(detTheta)])
+
+        # Normal vector of the opening
+        openNorm = np.array([np.sin(detTheta)*np.cos(netAng),
+                                np.sin(detTheta)*np.sin(netAng),
+                                np.cos(detTheta)])
+
+        detectorVec = detNorm
+        detectorLoc = detPos
+
         # Indices of threeDPoints that are closest to the detector
         zPoints = threeDPoints[:, 2]
         idx = np.abs(zPoints-detPos[2]) < cellSize
@@ -1417,15 +1601,49 @@ def volume_weights(detPos, detPhi, detSize, bendRad, tubeAng,
                                  levels = np.linspace(0, 1, 100),
                                  cmap='inferno')
         
-        # Plot the detector
-        ax.scatter([detPos[0]], [detPos[1]], s=200,
-                   label='Detector')
+        # Detector boundary
+        # 100 points on a unit circle in the xy-plane
+        detPosArr = np.array([np.cos(np.linspace(0,2*np.pi,100)),
+                              np.sin(np.linspace(0,2*np.pi,100)),
+                              np.zeros(100)])
+        # Scale unit circle to detector size
+        detPosArr *= np.sqrt(detSize/np.pi)
+        # Angles by which to rotate this circle based on the detector normal
+        theta = np.arccos(detectorVec[2])
+        phi = np.arctan2(detectorVec[1],detectorVec[0])
+        # Initialize the rotation
+        rotObj = R.from_euler('ZYX',[phi,theta,0])
+        # Apply the rotation to each point
+        rotArr = []
+        for i in range(len(detPosArr[0])):
+            rotArr.append(rotObj.apply(detPosArr[:,i]))
+        rotArr = np.array(rotArr)
+        # Move to the detector location
+        rotArr += detectorLoc
+        # Plot the detector boundary
+        ax.plot(rotArr[:,0],rotArr[:,1],
+                label='Detector',
+                linewidth=6,
+                zorder=10)
         
-        # Length of chord from tube opening to detector (law of cosines)
-        chordLen = bendRad * np.sqrt(2*(1-np.cos(tubeAng)))
-        # Plot the aperture
-        ax.scatter([detPos[0] + np.cos(detPhi+tubeAng)*chordLen], [detPos[1] + np.sin(detPhi+tubeAng)*chordLen], s=200,
-                   label='Collimator')
+        # Opening boundary
+        # Angles by which to rotate this circle based on the detector normal
+        theta = np.arccos(openNorm[2])
+        phi = np.arctan2(openNorm[1],openNorm[0])
+        # Initialize the rotation
+        rotObj = R.from_euler('ZYX',[phi,theta,0])
+        # Apply the rotation to each point
+        rotArr2 = []
+        for i in range(len(detPosArr[0])):
+            rotArr2.append(rotObj.apply(detPosArr[:,i]))
+        rotArr2 = np.array(rotArr2)
+        # Move to the detector location
+        rotArr2 += adjustedPos
+        # Plot the opening boundary
+        ax.plot(rotArr2[:,0], rotArr2[:,1],
+                label='Opening',
+                linewidth=6,
+                zorder=10)
         
         ax.legend()
         ax.set_xlabel('X [m]')
@@ -1435,6 +1653,23 @@ def volume_weights(detPos, detPhi, detSize, bendRad, tubeAng,
         fig.colorbar(pltObj1, ticks=np.linspace(0, 1, 6))
         
         plt.show()
+
+        if savename != None:
+
+            # Save the data being plotted
+            np.savez('/home/sanwalka/synthetic_proton_detector/reactivity/'+savename+'.npz',
+                     detPosX = rotArr[:, 0],
+                     detPosY = rotArr[:, 1],
+
+                     openingPosX = rotArr2[:, 0],
+                     openingPosY = rotArr2[:, 1],
+
+                     xPosWeights = xPosPlotting,
+                     yPosWeights = yPosPlotting,
+                     weights = volumeWeights[idx],
+                     distance = volumeDistances[idx],
+                     
+                     detZLoc = detPos[2])
         
         #### Plot the distances to the detector
         
@@ -2082,12 +2317,12 @@ def absolute_detector_response(filenameReactivity, detPos, detPhi, detSize, bend
         Rate of hits on the detector in counts/s.
     """
 
-    print('Calculating the volume weights')
     startTime = time.time()
+
     # Weights for each voxel
     threeDPoints, volumeWeights, volumeDistances, _, _ = volume_weights(detPos, detPhi, detSize, bendRad, tubeAng, 
-                                                                        errorLim=1e-2,
-                                                                        maxParticles=200,
+                                                                        errorLim=1e-3,
+                                                                        maxParticles=2000,
                                                                         cellSize=2e-2,
                                                                         makeplot=False)
     
@@ -2179,7 +2414,7 @@ def compute_row_detector(i, filenameReactivity, detPosArr, detPhiArr, detSizeArr
     return i, detResponse
 
 def generate_detector_response(filenameEqdsk, filenameReactivity,
-                               detPosArr, detPhiArr, detSizeArr, bendRadArr, tubeAngArr, makeplot=False):
+                               detPosArr, detPhiArr, detSizeArr, bendRadArr, tubeAngArr, makeplot=False, savename=None):
     """
     This function generates the detector response for a given set of-
     1. Magnetic equilibirum (as given in filenameEqdsk)
@@ -2211,6 +2446,8 @@ def generate_detector_response(filenameEqdsk, filenameReactivity,
         Angle subtended by the collimating tube. [radians]
     makeplot : boolean, optional
         Make a plot of the detector response function. The default is False.
+    savename : str, optional
+        Name of the file to save the detector response as a .npz file. The default is None.
 
     Returns
     -------
@@ -2270,41 +2507,83 @@ def generate_detector_response(filenameEqdsk, filenameReactivity,
         
         plt.show()
     
+    if savename is not None:
+        np.savez('/home/sanwalka/synthetic_proton_detector/reactivity/'+savename, 
+                 detResponseArr=detResponseArr/1e3,
+                 detPosArr=detPosArr)
+    
     return detResponseArr
 
 if __name__ == '__main__':
+    """
+    Used to generate and plot the normalized detector response function for a given magnetic equilibrium and detector geometry. 
     
-    import matplotlib
-    matplotlib.use('TkAgg')
+    This is useful for visualizing the response function and making sure it looks reasonable.
+    """
 
-    #### Detector positions
+    detPos = np.array([-0.257,  0.307,  0.5])
+    detPhi = (np.pi/180) * (280)
+    detRad = 0.5 # inches
+    detSize = (np.pi*detRad*detRad) / 1550 # m^2
+    bendRad = 0.7 # meters
+    tubeAng = 10 * np.pi/180 # radians
+
+    filenameEqdsk='/home/sanwalka/synthetic_proton_detector/eqdsk/wham_hts_eqdsk_for_kunal'
+    b_field_interpolation(filenameEqdsk)
+
+    _, _, _, _, _ = volume_weights(detPos, detPhi, detSize, bendRad, tubeAng, 
+                                   cellSize=1e-2, errorLim=None, maxParticles=500,
+                                   makeplot=True, savename='volume_weights_0.7m_10deg')
+
+if __name__ == '__tempmain__':
+    """
+    Used to generate the detector response for a given magnetic equilibrium, 
+    fusion reactivity profile and detector geometry. 
+    
+    The output is saved as a .npz file in the reactivity folder.
+    """
+
+    ##############################################################################
+    #### Detector positions (boxport)
 
     # The detectors are evenly spaced on the boxport
-    zPosArr = np.arange(0.362, 0.665, 2*2.54/1e2) # 2in apart on the boxport
-    # zPosArr = np.array([0.5])
+    zPosArr = np.arange(0.362, 0.665, 2*2.54/1e2) # 2 in apart on the boxport
     xPos = -0.257
     yPos = 0.307
     detPosArr = np.array([[xPos, yPos, zPos] for zPos in zPosArr]) # meters
     
     # Detector angles
-    detPhiArr = np.full(len(zPosArr), (np.pi/180) * (270)) # radians
-    # Optimized angles
     detPhiArr = np.array([282, 278, 275, 271, 264, 258]) * (np.pi/180)
-    
+    ##############################################################################
+
+    ##############################################################################
+    #### Detector positions (HTPD 2026)
+    zPosArr = np.arange(0.2, 0.61, 0.05)
+    xPos = -0.257
+    yPos = 0.307
+    detPosArr = np.array([[xPos, yPos, zPos] for zPos in zPosArr]) # meters
+
+    # Detector angles
+    detPhiArr = np.array([296, 294, 292, 290, 288, 286, 284, 278, 273]) * (np.pi/180)
+    ##############################################################################
+
     # Detector sizes
-    detSizeArr = np.full(len(zPosArr), (np.pi*0.5*0.5) / 1550) # m^2
-    
+    detRad = 0.5 # inches
+    detSizeArr = np.full(len(zPosArr), (np.pi*detRad*detRad) / 1550) # m^2
+
     # Tube bend radii
-    bendRadArr = np.full(len(zPosArr), 0.3) # meters
+    bendRadArr = np.full(len(zPosArr), 1.2) # meters
     
     # Tube sector angle
-    tubeAngArr = np.full(len(zPosArr), 20 * np.pi/180) # radians
+    tubeAngArr = np.full(len(zPosArr), 10 * np.pi/180) # radians
     
     #### eqdsk file
     filenameEqdsk='/home/sanwalka/synthetic_proton_detector/eqdsk/wham_hts_eqdsk_for_kunal'
     
     #### Fusion reactivity profile
     filenameReactivity = '/home/sanwalka/synthetic_proton_detector/reactivity/Te_2keV_NBI_2d_reactivity.npz'
+    filenameReactivity = '/home/sanwalka/synthetic_proton_detector/reactivity/predicted_reactivity_2d.npz'
+    filenameReactivity = '/home/sanwalka/synthetic_proton_detector/reactivity/predicted_reactivity_2d_keisuke.npz'
     
     """
     Generate the detector response for the given-
@@ -2314,34 +2593,29 @@ if __name__ == '__main__':
     """
     
     detResponse = generate_detector_response(filenameEqdsk, filenameReactivity, detPosArr, detPhiArr, detSizeArr, bendRadArr, tubeAngArr,
-                                             makeplot=True)
+                                             makeplot=True, savename='detector_response_keisuke.npz')
     
 if __name__ == '__tempmain__':
-        
-    import matplotlib
-    matplotlib.use('TkAgg')
+    """
+    Used to check the angle of a specific detector to make sure it sees the core of the plasma.
+    """
 
     filenameEqdsk='/home/sanwalka/synthetic_proton_detector/eqdsk/wham_hts_eqdsk_for_kunal'
     
     b_field_interpolation(filenameEqdsk)
     
-    detPos = np.array([-0.257,  0.307,  0.616])
+    detPos = np.array([-0.257,  0.307,  0.5])
     
-    detPhi = (np.pi/180) * (258)
+    detPhi = (np.pi/180) * (280)
     
-    detSize = (np.pi*0.5*0.5) / 1550
+    detRad = 0.5 # inches
+    detSize = (np.pi*detRad*detRad) / 1550
     
-    bendRad = 0.3
+    bendRad = 0.7
     
-    tubeAng = 20 * np.pi/180
+    tubeAng = 10 * np.pi/180
+
+    # Save the particle tracks
+    savename = '/home/sanwalka/synthetic_proton_detector/particle_tracks/track_data_0.7m_10deg.pkl'
     
-    openingTracks = generate_tracks_aperture(detPos, detPhi, detSize, bendRad, tubeAng, makeplot=True)
-    
-# if __name__ == '__main__':
-    
-#     filenameReactivity = 'C:/Users/kunal/OneDrive - UW-Madison/WHAM/Data/Proton Detector/Te_0.1keV_NBI_2d_reactivity.npz'
-    
-#     detPos = np.array([-0.257 ,  0.307 ,  0.362 ])
-#     detPhi = 
-    
-#     detectorRate = absolute_detector_response(filenameReactivity, detPos, detPhi, detSize, bendRad, tubeAng)
+    openingTracks = generate_tracks_aperture(detPos, detPhi, detSize, bendRad, tubeAng, makeplot=True, saveplot=True, savename=savename)

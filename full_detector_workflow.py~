@@ -4,17 +4,6 @@ Created on Mon Jan 26 14:54:34 2026
 
 @author: kunal
 """
-import os
-
-os.environ["OMP_NUM_THREADS"] = "1"
-os.environ["MKL_NUM_THREADS"] = "1"
-os.environ["OPENBLAS_NUM_THREADS"] = "1"
-os.environ["NUMEXPR_NUM_THREADS"] = "1"
-
-print('full_detector_workflow.py')
-print("OMP_NUM_THREADS =", os.environ.get("OMP_NUM_THREADS"))
-print("MKL_NUM_THREADS =", os.environ.get("MKL_NUM_THREADS"))
-print("OPENBLAS_NUM_THREADS =", os.environ.get("OPENBLAS_NUM_THREADS"))
 
 from detector_instrument_function import generate_detector_response
 from predicted_fusion_reactivity import dist_func_rz, fusion_reactivity_rz
@@ -22,8 +11,7 @@ from predicted_fusion_reactivity import dist_func_rz, fusion_reactivity_rz
 import time
 import numpy as np
 import matplotlib.pyplot as plt
-import multiprocessing as mp
-plt.rcParams.update({'font.size': 24})
+plt.rcParams.update({'font.size': 30})
 
 def detector_response_from_plasma(filenameEqdsk,
                                   savenameReactivity,
@@ -61,28 +49,25 @@ def detector_response_from_plasma(filenameEqdsk,
     detResponse = generate_detector_response(filenameEqdsk, savenameReactivity, detPosArr, detPhiArr, detSizeArr, bendRadArr, tubeAngArr,
                                                makeplot=False)
     
-    # Assume poisson stastics to get the standard deviation of the detector response
-    detResponseStd = np.sqrt(detResponse)
-    
     detectorTime = time.time()
     if timing == True:
         print(f'Time taken to generate the detector response = {np.round(detectorTime-reactivityTime, 2)}s')
     
-    return detResponse, detResponseStd
+    return detResponse
 
 if __name__ == '__main__':
-
+    
     # =========================================================================
     # Path to the eqdsk file
     # =========================================================================
     
-    filenameEqdsk='/home/sanwalka/synthetic_proton_detector/eqdsk/wham_hts_eqdsk_for_kunal'
+    filenameEqdsk='C:/Users/kunal/OneDrive - UW-Madison/WHAM/Data/eqdsk/wham_hts_eqdsk_for_kunal'
     
     # =========================================================================
     # Save data directory
     # =========================================================================
     
-    saveDir = '/home/sanwalka/synthetic_proton_detector/reactivity/'
+    saveDir = 'C:/Users/kunal/OneDrive - UW-Madison/WHAM/Data/Proton Detector/'
     
     # =========================================================================
     # Define the detector array geometry
@@ -114,15 +99,16 @@ if __name__ == '__main__':
     # =========================================================================
     
     # Radial values at the midplane for the distribution function
-    rArr = np.linspace(0, 0.1, 20)
+    rArr = np.linspace(0, 0.1, 10)
     
     # Axial positions
-    zArr = np.linspace(0, 0.8, 40)
+    zArr = np.linspace(0, 0.8, 20)
     
     # Radial n_e profile
     nArr = np.full(np.shape(rArr), 1e19)
     
     # Radial T_e profile
+    TeScan = np.array([0.1, 0.5, 2])
     TeArr = np.full(np.shape(rArr), 0.1)
     
     # Radial Z_eff profile
@@ -135,63 +121,50 @@ if __name__ == '__main__':
     theta_NBI = np.pi/4
     
     # =========================================================================
-    # Run the same script 10 times to see run-to-run variations in the detector response
+    # Compare effect of different NBI energies on detector performance
     # =========================================================================
     
     detResponseScan = []
     
-    for i in range(10):
+    for i in range(len(TeScan)):
         
-        print('*****************************')
-        print(f'{i+1} of 10')
-        print('*****************************')
-
-        savenameReactivity = saveDir + f'run_{i}_reactivity.npz'
+        savenameReactivity = saveDir + f'Te_{TeScan[i]}keV_NBI_2d_reactivity.npz'
         
-        detResponseArr, _ = detector_response_from_plasma(filenameEqdsk, savenameReactivity, 
+        TeArr *= TeScan[i]/np.max(TeArr)
+        
+        detResponseArr = detector_response_from_plasma(filenameEqdsk, savenameReactivity, 
                                                        
-                                                                       detPosArr, 
-                                                                       detPhiArr, 
-                                                                       detSizeArr, 
-                                                                       bendRadArr, 
-                                                                       tubeAngArr, 
-                                                                       
-                                                                       rArr, 
-                                                                       zArr, 
-                                                                       nArr, 
-                                                                       TeArr, 
-                                                                       ZeffArr, 
-                                                                       E_NBI, 
-                                                                       theta_NBI,
+                                                       detPosArr, 
+                                                       detPhiArr, 
+                                                       detSizeArr, 
+                                                       bendRadArr, 
+                                                       tubeAngArr, 
                                                        
-                                                                       timing=True)
+                                                       rArr, 
+                                                       zArr, 
+                                                       nArr, 
+                                                       TeArr, 
+                                                       ZeffArr, 
+                                                       E_NBI, 
+                                                       theta_NBI,
+                                                       
+                                                       timing=True)
         
         detResponseScan.append(detResponseArr)
     detResponseScan = np.array(detResponseScan)
    
-    # Get the average and standard deviation of the detector response across the 10 runs
-    detResponseMean = np.mean(detResponseScan, axis=0)
-    detResponseStd = np.std(detResponseScan, axis=0)
-
+    #%%
     fig = plt.figure(figsize=(12, 8), tight_layout=True)
     ax = fig.add_subplot(111)
     
-    ax.errorbar(detPosArr[:, 2], detResponseMean/1e3, yerr=detResponseStd/1e3, 
-                fmt='o', 
-                markersize=10, 
-                linewidth=3, 
-                label='Mean ± Std Dev')
-    ax.plot(detPosArr[:, 2], detResponseMean/1e3, 
-            linewidth=3)
-    
-    # for i in range(10):
+    for i in range(len(TeScan)):
         
-    #     ax.plot(detPosArr[:, 2], detResponseScan[i]/1e3, 
-    #             linewidth = 3,
-    #             label=r'Run '+f'{i+1}')
-    #             # label=r'E$_{NBI}$='+f'{E_NBI[i]}keV')
-    #     ax.scatter(detPosArr[:, 2], detResponseScan[i]/1e3, 
-    #                s = 300)
+        ax.plot(detPosArr[:, 2], detResponseScan[i]/1e3, 
+                linewidth = 3,
+                label=r'$T_e$='+f'{TeScan[i]}keV')
+                # label=r'E$_{NBI}$='+f'{E_NBI[i]}keV')
+        ax.scatter(detPosArr[:, 2], detResponseScan[i]/1e3, 
+                   s = 300)
         
     ax.legend()
     ax.set_xlabel('Z [m]')

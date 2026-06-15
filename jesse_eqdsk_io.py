@@ -1,11 +1,12 @@
-#SF reworked 2023/11 to use more standard eqdsk formatting and fix issues with
-#vessel and limiter writing
+# SF reworked 2023/11 to use more standard eqdsk formatting and fix issues with
+# vessel and limiter writing
+
 import sys
 import numpy as np
 import matplotlib.pyplot as plt
-from pleiades.analysis import locs_to_vals
+# from pleiades.analysis import locs_to_vals
 from scipy.interpolate import CubicSpline
-import pleiades.eqformatting as eqfrmt
+import pleiades.utils.eqformatting as eqfrmt
 import h5py
 # from pleiades.h5py_helper import dic_to_h5grp, h5grp_to_dic
 
@@ -34,6 +35,10 @@ class EQDSK():
     #
         #generate limiter and vessel surfaces
         print('creating_eqdsk')
+
+        # Kunal (26th May, 2026) -  If this code breaks, it is most likely here. 
+        #                           locs_to_vals is just an interpolation function and should be replaced with something from scipy. 
+        #                           This is becuase pleiades was re-written and locs_to_vals is no longer available.
         [psi_lim] = locs_to_vals(R,Z,psi,[(rLim,zLim)])
         cs_ = plt.contour(Z,R,psi,levels=[psi_lim])
         limdat = cs_.allsegs[0]
