@@ -27,7 +27,6 @@ import numpy as np
 import scipy as sc
 import scipy.constants as const
 import matplotlib.pyplot as plt
-from scipy.interpolate import RegularGridInterpolator
 from scipy.integrate import solve_ivp
 from scipy.spatial.transform import Rotation as R
 from random_geometry_points.plane import Plane
@@ -359,12 +358,12 @@ def integrand_relativistic(t,y,species='D'):
     # Try-except block since the particle can go beyond the range of the
     # generated eqdsk. If this were to happen to a real particle it would have
     # hit the wall anyway so just set v and a to 0.
-    if r > BrInterpolator.grid[1][-1] or zPos > BrInterpolator.grid[0][-1] or zPos < BrInterpolator.grid[0][0]:
+    if r > 0.45 or np.abs(zPos) > 1:
         return np.zeros(6)
     else:
         # Get Br and Bz at those points
-        Br = BrInterpolator([zPos,r])[0]
-        Bz = BzInterpolator([zPos,r])[0]
+        Br = BrInterpolator(zPos, r)[0]
+        Bz = BzInterpolator(zPos, r)[0]
     
     # Convert Br to Bx and By
     if r > 0:
@@ -477,11 +476,12 @@ def single_particle_track(xIni, energy, theta, phi=0, species='H',
     # return stateVec
 
     # Solve the inital value problem for the position and velocity
-    stateVec=solve_ivp(fun=integrand_relativistic,              # f(y,t)
-                       t_span=(0,totTime),                      # Time domain over which we want the solution
-                       y0=initCond,                             # Initial conditions
-                       t_eval=np.linspace(0,totTime,timesteps), # Timesteps at which to save the state vector
-                       args=(species,))                         # Other arguments in 'integrand'
+    stateVec = solve_ivp(fun = integrand_relativistic,              # f(y,t)
+                         t_span = (0,totTime),                      # Time domain over which we want the solution
+                         y0 = initCond,                             # Initial conditions
+                         t_eval = np.linspace(0,totTime,timesteps), # Timesteps at which to save the state vector
+                         args = (species,),                         # Other arguments in 'integrand'
+                         dense_output = False)                      # Don't need the dense output since we are only interested in the state vector at the specified timesteps
     
     return stateVec.y
 
@@ -2376,6 +2376,7 @@ def b_field_interpolation(filenameEqdsk):
     # Load the data from the .npz file made by this function
     npzFilename = np.load('filenameEqdsk'+'.npz', allow_pickle=True)
 
+    # These are all 2D arrays with regular spacing for r and z.
     Rmesh = npzFilename['Rmesh']
     Zmesh = npzFilename['Zmesh']
     Br = npzFilename['Br']
@@ -2384,17 +2385,16 @@ def b_field_interpolation(filenameEqdsk):
     eqdsk_psi = npzFilename['magneticFlux']
     psilim = npzFilename['psilim']
 
+    r1D = Rmesh[0]
+    z1D = Zmesh[:, 0]
+
     # Interpolation function for magnetic field data
     # Converts the grid data into a function which can return Br and Bz at any
     # given (r,z)
-    BzInterpolator = RegularGridInterpolator((Zmesh[:,0], Rmesh[0]), Bz)
-    BrInterpolator = RegularGridInterpolator((Zmesh[:,0], Rmesh[0]), Br)
-    BmagInterpolator = RegularGridInterpolator((Zmesh[:,0], Rmesh[0]), Bmag)
-    
-    # Stuff needed for plotting in other helper functions
-    # eqdsk data object
-    #eqDict = eqTools.read_eqdsk(filenameEqdsk)
-    
+    BzInterpolator = sc.interpolate.RectBivariateSpline(z1D, r1D, Bz)
+    BrInterpolator = sc.interpolate.RectBivariateSpline(z1D, r1D, Br)
+    BmagInterpolator = sc.interpolate.RectBivariateSpline(z1D, r1D, Bmag)
+
     return
 
 def compute_row_detector(i, filenameReactivity, detPosArr, detPhiArr, detSizeArr, bendRadArr, tubeAngArr):
