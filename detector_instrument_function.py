@@ -308,7 +308,7 @@ def integrand(t,y,species='D'):
     
     return dvdt
 
-def integrand_relativistic(t,y,species='D'):
+def integrand_relativistic(t, y, species='D', qm=1, gamma=1):
     """
     This function is the integrand used by the solve_ivp function called in
     single_particle_track. This is done as scipy already has a built in initial
@@ -329,6 +329,12 @@ def integrand_relativistic(t,y,species='D'):
     species : string, optional
         Species code. 
         The default is 'D'.
+    qm : float, optional
+        Charge to mass ratio (C/kg).
+        The default is 1.
+    gamma : float, optional
+        Lorentz factor.
+        The default is 1 (non-relativistic).
 
     Returns
     -------
@@ -373,20 +379,14 @@ def integrand_relativistic(t,y,species='D'):
         Bx = 0
         By = 0
     
-    # Charge to mass ratio
-    qm = charge_to_mass_ratio(species)
-    
-    # Gamma factor
-    gamma = 1/np.sqrt(1-((vx**2+vy**2+vz**2)/const.c**2))
-    
     # Calculate acceleration
     dvdt = np.zeros(6)
     dvdt[0] = vx
     dvdt[1] = vy
     dvdt[2] = vz
-    dvdt[3] = gamma*qm*(vy*Bz-vz*By) # ax
-    dvdt[4] = gamma*qm*(vz*Bx-vx*Bz) # ay
-    dvdt[5] = gamma*qm*(vx*By-vy*Bx) # az
+    dvdt[3] = (qm/gamma) * (vy*Bz-vz*By) # ax
+    dvdt[4] = (qm/gamma) * (vz*Bx-vx*Bz) # ay
+    dvdt[5] = (qm/gamma) * (vx*By-vy*Bx) # az
     
     return dvdt
 
@@ -444,7 +444,7 @@ def single_particle_track(xIni, energy, theta, phi=0, species='H',
                posArr[4]=vy(t)
                posArr[5]=vz(t)
     """
-        
+      
     # Total time for the integration
     totTime = timesteps*steplength
     
@@ -453,34 +453,23 @@ def single_particle_track(xIni, energy, theta, phi=0, species='H',
                                theta,
                                phi=phi,
                                species=species)
+
+    # Gamma factor
+    speed = np.linalg.norm(vIni)
+    gamma = 1/np.sqrt(1-(speed**2/const.c**2))
+
+    # Charge to mass ratio
+    qm = charge_to_mass_ratio(species)
     
     # Initial conditions array
     initCond = np.concatenate((xIni,vIni))
-    
-    # # Array to store the state vector at each time step
-    # stateVec = np.zeros((6,timesteps))
-    # stateVec[:,0] = initCond
-
-    # for i in range(timesteps):
-
-    #     #Get the current state vector
-    #     currStateVec = stateVec[:,i]
-        
-    #     #Get the derivative of the state vector at this time step
-    #     dStateVecdt = integrand_relativistic(0, currStateVec, species=species)
-        
-    #     #Update the state vector using Euler's method
-    #     if i < timesteps - 1:
-    #         stateVec[:,i+1] = currStateVec + dStateVecdt * steplength
-
-    # return stateVec
 
     # Solve the inital value problem for the position and velocity
     stateVec = solve_ivp(fun = integrand_relativistic,              # f(y,t)
                          t_span = (0,totTime),                      # Time domain over which we want the solution
                          y0 = initCond,                             # Initial conditions
                          t_eval = np.linspace(0,totTime,timesteps), # Timesteps at which to save the state vector
-                         args = (species,),                         # Other arguments in 'integrand'
+                         args = (species, qm, gamma,),              # Other arguments in 'integrand'
                          dense_output = False)                      # Don't need the dense output since we are only interested in the state vector at the specified timesteps
     
     return stateVec.y
