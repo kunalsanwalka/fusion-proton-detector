@@ -582,7 +582,7 @@ def generate_tracks_detector(detPos, detSize, detTheta, detPhi,
     particleNum = 1
     
     setupTime = time.time()
-    print('Time taken to set up track generation- '+str(setupTime-startTime)+' seconds')
+    # print('Time taken to set up track generation- '+str(setupTime-startTime)+' seconds')
 
     # Go over each point
     for point in planePoints:
@@ -702,7 +702,7 @@ def generate_tracks_detector(detPos, detSize, detTheta, detPhi,
         plt.show()
     
     endTime = time.time()
-    print('Time taken to generate tracks in generate_tracks_detector '+str(endTime-startTime)+' seconds')
+    # print('Time taken to generate tracks in generate_tracks_detector '+str(endTime-startTime)+' seconds')
 
     return particleTracks
 
@@ -811,7 +811,7 @@ def generate_tracks_aperture(detPos, detPhi, detSize, bendRad, tubeAng,
                                             numLaunchPos=numLaunchPos, numLaunchesPerPos=numLaunchesPerPos)
     
     generationTime = time.time()
-    print('Time taken to generate tracks- '+str(generationTime-startTime)+' seconds')
+    # print('Time taken to generate tracks- '+str(generationTime-startTime)+' seconds')
 
     # =============================================================================
     # Analysis
@@ -1238,12 +1238,12 @@ def generate_tracks_aperture(detPos, detPhi, detSize, bendRad, tubeAng,
             plt.show()
     
     endTime = time.time()
-    print('Time taken to analyze and plot tracks- '+str(endTime-generationTime)+' seconds')
+    # print('Time taken to analyze and plot tracks- '+str(endTime-generationTime)+' seconds')
 
     return openingTracks
 
 def volume_weights(detPos, detPhi, detSize, bendRad, tubeAng, 
-                   cellSize=1e-2, errorLim=1e-2, maxParticles=200,
+                   cellSize=1e-2, errorLim=1e-2, minParticles=50, maxParticles=200,
                    makeplot=False, savename=None):
     """
     This function calculates the instrument function for a given detector 
@@ -1274,6 +1274,10 @@ def volume_weights(detPos, detPhi, detSize, bendRad, tubeAng,
         Error limit before the simulation is considered to have converged.
         The default is 1e-2.
         If set to None, then the simulation will only stop when maxParticles is reached.
+    minParticles : float, optional
+        Minimum number of particles to be launched by the simulation before it
+        exits.
+        The default is 50.
     maxParticles : float, optional
         Maximum number of particles to be launched by the simulation before it
         exits.
@@ -1328,7 +1332,7 @@ def volume_weights(detPos, detPhi, detSize, bendRad, tubeAng,
     # If errorLim is None, then we only stop when maxParticles is reached
     if errorLim != None:
 
-        while currError >= errorLim and totParticles[-1] <= maxParticles:
+        while (currError >= errorLim and totParticles[-1] <= maxParticles) or totParticles[-1] <= minParticles:
         
             startTime = time.time()
             
@@ -1346,7 +1350,7 @@ def volume_weights(detPos, detPhi, detSize, bendRad, tubeAng,
                                                      makeplot=False)
             
             tracksGenerationTime = time.time()
-            print(f'Time taken to generate tracks= {tracksGenerationTime - startTime}s')
+            # print(f'Time taken to generate tracks= {tracksGenerationTime - startTime}s')
 
             # Go over each particle track and see which volume elements it went through
             chunk_size = 10000  # Process grid points in chunks to avoid huge memory usage
@@ -1419,7 +1423,7 @@ def volume_weights(detPos, detPhi, detSize, bendRad, tubeAng,
                 # print('Particle Number = {}'.format(totParticles[-1]))
                 
             volumeTrackingTime = time.time()
-            print(f'Time taken to check volumes = {volumeTrackingTime - tracksGenerationTime}s')
+            # print(f'Time taken to check volumes = {volumeTrackingTime - tracksGenerationTime}s')
                 
             i+=1
     
@@ -1443,7 +1447,7 @@ def volume_weights(detPos, detPhi, detSize, bendRad, tubeAng,
                                                     makeplot=False)
             
             tracksGenerationTime = time.time()
-            print(f'Time taken to generate tracks= {tracksGenerationTime - startTime}s')
+            # print(f'Time taken to generate tracks= {tracksGenerationTime - startTime}s')
 
             # Go over each particle track and see which volume elements it went through
             chunk_size = 10000  # Process grid points in chunks to avoid huge memory usage
@@ -1516,7 +1520,7 @@ def volume_weights(detPos, detPhi, detSize, bendRad, tubeAng,
                 # print('Particle Number = {}'.format(totParticles[-1]))
                 
             volumeTrackingTime = time.time()
-            print(f'Time taken to check volumes = {volumeTrackingTime - tracksGenerationTime}s')
+            # print(f'Time taken to check volumes = {volumeTrackingTime - tracksGenerationTime}s')
                 
             i+=1
 
@@ -2310,7 +2314,8 @@ def absolute_detector_response(filenameReactivity, detPos, detPhi, detSize, bend
 
     # Weights for each voxel
     threeDPoints, volumeWeights, volumeDistances, _, _ = volume_weights(detPos, detPhi, detSize, bendRad, tubeAng, 
-                                                                        errorLim=1e-3,
+                                                                        errorLim=1e-2,
+                                                                        minParticles=200,
                                                                         maxParticles=2000,
                                                                         cellSize=2e-2,
                                                                         makeplot=False)
@@ -2503,7 +2508,7 @@ def generate_detector_response(filenameEqdsk, filenameReactivity,
     
     return detResponseArr
 
-if __name__ == '__main__':
+if __name__ == '__tempmain__':
     """
     Used to generate and plot the normalized detector response function for a given magnetic equilibrium and detector geometry. 
     
@@ -2524,7 +2529,7 @@ if __name__ == '__main__':
                                    cellSize=1e-2, errorLim=None, maxParticles=500,
                                    makeplot=True, savename='volume_weights_0.7m_10deg')
 
-if __name__ == '__tempmain__':
+if __name__ == '__main__':
     """
     Used to generate the detector response for a given magnetic equilibrium, 
     fusion reactivity profile and detector geometry. 
