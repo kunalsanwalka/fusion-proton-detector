@@ -32,6 +32,7 @@ from itertools import chain
 import numpy as np
 import scipy as sc
 import matplotlib.pyplot as plt
+import matplotlib.colors as colors
 from multiprocessing import Pool, cpu_count
 from functools import partial
 
@@ -44,7 +45,7 @@ plt.rcParams.update({'font.size': 26})
 global plotDir
 plotDir = '/home/sanwalka/synthetic_proton_detector/plots/'
 
-def dist_func(n, R_m, E_NBI, theta_NBI, T_e, mu_i, Z_eff, gridsize=100, 
+def dist_func(n_fast, n_max, T_max, R_m, E_NBI, theta_NBI, T_e, mu_i, Z_eff, gridsize=100, 
               makeplot=False, savename=None):
     """
     This function calculates the distribution function at the midplane for a
@@ -52,8 +53,12 @@ def dist_func(n, R_m, E_NBI, theta_NBI, T_e, mu_i, Z_eff, gridsize=100,
 
     Parameters
     ----------
-    n : float
-        Plasma density (used for normalization). [particles / m^-3] 
+    n_fast : float
+        Fast ion plasma density (used for normalization). [particles / m^-3]
+    n_max : float
+        Maxwellian background plasma density (used for normalization). [particles / m^-3]
+    T_max : float
+        Maxwellian background plasma temperature. [keV]
     R_m : float
         Mirror ratio.
     E_NBI : float
@@ -90,6 +95,10 @@ def dist_func(n, R_m, E_NBI, theta_NBI, T_e, mu_i, Z_eff, gridsize=100,
     q = sc.constants.e
     m_p = sc.constants.m_p
     
+    # ======================================
+    # Fast ion component via egedal
+    # ======================================
+
     # Injection velocity of the NBI [m/s]
     vNBI = (2*1e3*E_NBI*q/(m_p*mu_i))**0.5
     
@@ -110,11 +119,6 @@ def dist_func(n, R_m, E_NBI, theta_NBI, T_e, mu_i, Z_eff, gridsize=100,
     # Obtain the distribution function
     f = fObj.f(Y, X)
     
-    # Calculate the density at the midplane
-    n_f = fObj.n(1)
-    # Normalize the distribution function by the density
-    f *= n/n_f
-    
     # Convert the velocity grids to vPar and vPerp
     theta = np.arccos(X)
     vPar = Y*np.cos(theta)
@@ -132,16 +136,52 @@ def dist_func(n, R_m, E_NBI, theta_NBI, T_e, mu_i, Z_eff, gridsize=100,
     fOnGrid = sc.interpolate.griddata(velPoints, f1D, (vPAR, vPERP), method='cubic', fill_value=0)
     
     # Rename stuff
-    f = fOnGrid
+    fFast = fOnGrid
     vPar = vPAR
     vPerp = vPERP
-    
+
+    # Normalize the fast ion distribution function to n_fast
+    fastDens = np.trapezoid(np.trapezoid(fFast, vPerp[:, 0], axis=0), vPar[0], axis=0)
+    fFast *= n_fast/fastDens
+
+    # ======================================
+    # Maxwellian background component
+    # ======================================
+
+    vTot = np.sqrt(vPar**2 + vPerp**2)
+
+    tempInJoules = T_max*1e3*q
+    ionMass = m_p*mu_i
+
+    fMaxwell = np.exp(-ionMass*vTot**2/(2*tempInJoules))
+
+    maxwellDens = np.trapezoid(np.trapezoid(fMaxwell, vPerp[:, 0], axis=0), vPar[0], axis=0)
+    fMaxwell *= n_max/maxwellDens
+
+    f = fFast + fMaxwell
+    f = np.clip(f, a_min=0, a_max=None)
+
     if makeplot == True:
         
-        fig = plt.figure(figsize=(8, 8), tight_layout=True)
+        fig = plt.figure(figsize=(10, 8), tight_layout=True)
         ax = fig.add_subplot(111)
         
-        pltObj = ax.contourf(vPar/vNBI, vPerp/vNBI, f/np.max(f), levels = 100)
+        # Normalize first, then clip to log-safe minimum BEFORE passing to contourf
+        f_norm = f / np.max(f)
+        vmin_log = 1e-4
+        f_norm = np.clip(f_norm, a_min=vmin_log, a_max=1)  # kill exact zeros
+        
+        levels = np.logspace(np.log10(vmin_log), 0, 100)   # log-spaced levels
+        
+        pltObj = ax.contourf(vPar/vNBI, vPerp/vNBI, f_norm,
+                            norm=colors.LogNorm(vmin=vmin_log, vmax=1),
+                            levels=levels,
+                            extend='neither')
+        
+        cbar = fig.colorbar(pltObj, ax=ax)
+        cbar.set_label(r'f/f$_{max}$')
+        cbar.set_ticks([1e-4, 1e-3, 1e-2, 1e-1, 1e0])
+        cbar.set_ticklabels([r'$10^{-4}$', r'$10^{-3}$', r'$10^{-2}$', r'$10^{-1}$', r'$10^{0}$'])
         
         # Add a text box with the plasma parameters
         textstr = '\n'.join((
@@ -152,15 +192,10 @@ def dist_func(n, R_m, E_NBI, theta_NBI, T_e, mu_i, Z_eff, gridsize=100,
         props = dict(boxstyle='round', facecolor='white', alpha=1)
         ax.text(0.05, 0.95, textstr, transform=ax.transAxes, fontsize=22,
                 horizontalalignment='left', verticalalignment='top', bbox=props)
-
-        # cbar = fig.colorbar(pltObj,
-        #                     ticks = np.linspace(0, 1, 6))
         
         ax.set_aspect('equal')
         ax.set_xlabel(r'$v_{||}/v_0$')
         ax.set_ylabel(r'$v_{\perp}/v_0$')
-        # ax.set_title(r'$E_{NBI}$ = '+str(E_NBI)+r'keV; $T_e$= '+str(T_e)+r'keV; $Z_{eff}$ = '+str(Z_eff), 
-        #              pad=45)
         ax.set_title(r'$f_{z=0}(v_{||}, v_{\perp})$')
         
         if savename is not None:
@@ -437,7 +472,7 @@ def dist_func_z_evol(f, vPar, vPerp, rDist, zValArr, Rmesh, Zmesh, Bmag, magneti
     
     return zEvolf, rValArr
 
-def compute_row_fz(i, nArr, RmArr, E_NBI, theta_NBI, TeArr, mu_i, ZeffArr, gridsize, rArr, zArr, Rmesh, Zmesh, Bmag, magneticFlux):
+def compute_row_fz(i, nFastArr, nMaxArr, TMaxArr, RmArr, E_NBI, theta_NBI, TeArr, mu_i, ZeffArr, gridsize, rArr, zArr, Rmesh, Zmesh, Bmag, magneticFlux):
     """
     Computes f along z for a given set of r and z values. This is purely a
     helper function that allows dist_func_rz to run things in
@@ -445,14 +480,14 @@ def compute_row_fz(i, nArr, RmArr, E_NBI, theta_NBI, TeArr, mu_i, ZeffArr, grids
     """
 
     # Get the distribution function at the midplane
-    vPar, vPerp, midplaneF = dist_func(nArr[i], RmArr[i], E_NBI, theta_NBI, TeArr[i], mu_i, ZeffArr[i], gridsize=gridsize)
+    vPar, vPerp, midplaneF = dist_func(nFastArr[i], nMaxArr[i], TMaxArr[i], RmArr[i], E_NBI, theta_NBI, TeArr[i], mu_i, ZeffArr[i], gridsize=gridsize)
     
     # Evolve it along zVals
     f_z, rAlongTube = dist_func_z_evol(midplaneF, vPar, vPerp, rArr[i], zArr, Rmesh, Zmesh, Bmag, magneticFlux)
     
     return i, f_z, rAlongTube, vPar, vPerp
 
-def dist_func_rz(rArr, zArr, nArr, TeArr, ZeffArr, E_NBI, theta_NBI, mu_i, filenameEqdsk):
+def dist_func_rz(rArr, zArr, nFastArr, nMaxArr, TMaxArr, TeArr, ZeffArr, E_NBI, theta_NBI, mu_i, filenameEqdsk):
     """
     This function generates a distribution function at each (r,z) location in
     the plasma.
@@ -480,8 +515,12 @@ def dist_func_rz(rArr, zArr, nArr, TeArr, ZeffArr, E_NBI, theta_NBI, mu_i, filen
         function. [meters]
     zArr : np.array
         Axial positions where want the distribution functions. [meters]
-    nArr : np.array
-        Plasma density profile at the midplane. [m^-3]
+    nFastArr : np.array
+        Fast ion component plasma density profile at the midplane. [m^-3]
+    nMaxArr : np.array
+        Maxwellian background plasma density profile at the midplane. [m^-3]
+    TMaxArr : np.array
+        Maxwellian background plasma temperature profile at the midplane. [keV]
     TeArr : np.array
         T_e profile at the midplane. [keV]
     ZeffArr : np.array
@@ -582,7 +621,9 @@ def dist_func_rz(rArr, zArr, nArr, TeArr, ZeffArr, E_NBI, theta_NBI, mu_i, filen
     plt.switch_backend('Agg')
 
     worker = partial(compute_row_fz, 
-                     nArr=nArr,
+                     nFastArr=nFastArr,
+                     nMaxArr=nMaxArr,
+                     TMaxArr=TMaxArr,
                      RmArr=RmArr, 
                      E_NBI=E_NBI, 
                      theta_NBI=theta_NBI, 
@@ -949,7 +990,7 @@ def fusion_reactivity_rz(vPar, vPerp, zArr2D, rArr2D, f_rz, makeplot=False, save
     
     return zArr2D, rArr2D, reactivity2D
 
-if __name__ == '__main__':
+if __name__ == '__tempmain__':
     """
     Load the distribution function from a pleaides output.
     """
@@ -970,16 +1011,18 @@ if __name__ == '__tempmain__':
     #########################################################################################
     #### HTPD 2026 Plot
     # Save a plot of the distribution function at z=0 for a 0.1keV Te case
-    _, _, _ = dist_func(n=5e19,
-                        R_m=57,
-                        E_NBI=25,
-                        theta_NBI=np.pi/4,
-                        T_e=0.075,
-                        mu_i=2,
-                        Z_eff=3,
-                        gridsize=500,
-                        makeplot=True,
-                        savename='25keV_nbi_75eV_te_dist_func.png')
+    _, _, _ = dist_func(n_fast = 5e18,
+                        n_max = 5e19,
+                        T_max = 0.03,
+                        R_m = 57,
+                        E_NBI = 25,
+                        theta_NBI = np.pi/4,
+                        T_e = 0.075,
+                        mu_i = 2,
+                        Z_eff = 3,
+                        gridsize = 500,
+                        makeplot = True,
+                        savename = 'dist_func_with_maxwellian.png')
     #########################################################################################
 
     # Location of the CQL3D output file
@@ -994,14 +1037,16 @@ if __name__ == '__tempmain__':
 
     #########################################################################################
     #### HTPD 2026 Plot
-    vPar, vPerp, f = dist_func(n=5e19,
-                               R_m=57,
-                               E_NBI=25,
-                               theta_NBI=np.pi/4,
-                               T_e=0.075,
-                               mu_i=2,
-                               Z_eff=3,
-                               gridsize=500)
+    vPar, vPerp, f = dist_func(n_fast = 5e18,
+                               n_max = 5e19,
+                               T_max = 0.03,
+                               R_m = 57,
+                               E_NBI = 25,
+                               theta_NBI = np.pi/4,
+                               T_e = 0.075,
+                               mu_i = 2,
+                               Z_eff = 3,
+                               gridsize = 500)
     
     # Location of magnetic equilibrium file
     filenameEqdsk = '/home/sanwalka/synthetic_proton_detector/eqdsk/wham_hts_eqdsk_for_kunal'
@@ -1018,35 +1063,52 @@ if __name__ == '__tempmain__':
     # Calculate the z-evolved distribution function
     _, _ = dist_func_z_evol(f, vPar, vPerp, rDist, zValArr, Rmesh, Zmesh, Bmag, magneticFlux, makeplot=True)
 
-if __name__ == '__tempmain__':
+if __name__ == '__main__':
+    """
+    Calculate the 2D fusion reactivity profile
+    """
     
     # Location of magnetic equilibrium file
     filenameEqdsk = '/home/sanwalka/synthetic_proton_detector/eqdsk/wham_hts_eqdsk_for_kunal'
     
     # Location to store the 2D fusion reactivity profile
-    savenameReactivity = '/home/sanwalka/synthetic_proton_detector/reactivity/predicted_reactivity_2d_keisuke.npz'
+    savenameReactivity = '/home/sanwalka/synthetic_proton_detector/reactivity/predicted_reactivity_2d_with_maxwellian.npz'
     
     # Get the r-z evolved distribution functions
     rArr = np.linspace(0, 0.1, 20)
     zArr = np.linspace(0, 0.8, 20)
 
-    # The density and temperature profile have a tanh dependence on r.
-    nArr = 1e19*(1 - np.tanh((rArr-np.max(rArr))/0.02))/2
-    TeArr = 0.1*(1 - np.tanh((rArr-np.max(rArr))/0.02))/2
-
     # Use density and temperature profiles from Keisuke's paper.
     nArr = 5e19 - 3e20*rArr
     TeArr = 75 - (80*rArr)**2
 
+    # Fast ion component is 1/10 the maxwellian background
+    nFastArr = nArr/10
+    nMaxArr = nArr - nFastArr
+
+    # Assume the maxwellian background has a temperature of 30eV
+    TMaxArr = np.full(np.shape(rArr), 0.03)
+
     # Zeff is flat at 2 for simplicity
     ZeffArr = np.full(np.shape(rArr), 2)
 
+    # NBI parameters are the same for all flux surfaces
     E_NBI = 25
     theta_NBI = np.pi/4
     mu_i = 2
     
     startTime = time.time()
-    vPar, vPerp, zArr2D, rArr2D, f_rz = dist_func_rz(rArr, zArr, nArr, TeArr, ZeffArr, E_NBI, theta_NBI, mu_i, filenameEqdsk)
+    vPar, vPerp, zArr2D, rArr2D, f_rz = dist_func_rz(rArr, 
+                                                     zArr, 
+                                                     nFastArr, 
+                                                     nMaxArr,
+                                                     TMaxArr,
+                                                     TeArr, 
+                                                     ZeffArr, 
+                                                     E_NBI, 
+                                                     theta_NBI, 
+                                                     mu_i, 
+                                                     filenameEqdsk)
     distFuncTime = time.time()
     print(f'Time taken to generate f_rz = {np.round(distFuncTime - startTime, 2)}s')
     
