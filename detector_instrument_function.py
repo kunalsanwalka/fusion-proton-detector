@@ -2529,7 +2529,7 @@ if __name__ == '__tempmain__':
                                    cellSize=1e-2, errorLim=None, maxParticles=500,
                                    makeplot=True, savename='volume_weights_0.7m_10deg')
 
-if __name__ == '__main__':
+if __name__ == '__tempmain__':
     """
     Used to generate the detector response for a given magnetic equilibrium, 
     fusion reactivity profile and detector geometry. 
@@ -2589,6 +2589,77 @@ if __name__ == '__main__':
     detResponse = generate_detector_response(filenameEqdsk, filenameReactivity, detPosArr, detPhiArr, detSizeArr, bendRadArr, tubeAngArr,
                                              makeplot=True, savename='detector_response_with_maxwellian.npz')
     
+if __name__ == '__main__':
+    """
+    Check effect of maxwellian and fast ion components on the detector response.
+    """
+
+    ##############################################################################
+    #### Detector positions (HTPD 2026)
+    zPosArr = np.arange(0.2, 0.61, 0.05)
+    xPos = -0.257
+    yPos = 0.307
+    detPosArr = np.array([[xPos, yPos, zPos] for zPos in zPosArr]) # meters
+
+    # Detector angles
+    detPhiArr = np.array([296, 294, 292, 290, 288, 286, 284, 278, 273]) * (np.pi/180)
+    ##############################################################################
+
+    # Detector sizes
+    detRad = 0.5 # inches
+    detSizeArr = np.full(len(zPosArr), (np.pi*detRad*detRad) / 1550) # m^2
+
+    # Tube bend radii
+    bendRadArr = np.full(len(zPosArr), 1.2) # meters
+    
+    # Tube sector angle
+    tubeAngArr = np.full(len(zPosArr), 10 * np.pi/180) # radians
+    
+    #### eqdsk file
+    filenameEqdsk='/home/sanwalka/synthetic_proton_detector/eqdsk/wham_hts_eqdsk_for_kunal'
+
+    # Fast and maxwellian
+    print('Calculating response with both fast and maxwellian components')
+    filenameReactivity = '/home/sanwalka/synthetic_proton_detector/reactivity/predicted_reactivity_2d_fast_and_maxwellian.npz'
+    detResponseFastAndMaxwellian = generate_detector_response(filenameEqdsk, filenameReactivity, detPosArr, detPhiArr, detSizeArr, bendRadArr, tubeAngArr,
+                                                              makeplot=False)
+
+    # Only maxwellian
+    print('Calculating response with only maxwellian component')
+    filenameReactivity = '/home/sanwalka/synthetic_proton_detector/reactivity/predicted_reactivity_2d_maxwellian_only.npz'
+    detResponseMaxwellianOnly = generate_detector_response(filenameEqdsk, filenameReactivity, detPosArr, detPhiArr, detSizeArr, bendRadArr, tubeAngArr,
+                                                           makeplot=False)
+
+    # Only fast
+    print('Calculating response with only fast ion component')
+    filenameReactivity = '/home/sanwalka/synthetic_proton_detector/reactivity/predicted_reactivity_2d_fast_only.npz'
+    detResponseFastOnly = generate_detector_response(filenameEqdsk, filenameReactivity, detPosArr, detPhiArr, detSizeArr, bendRadArr, tubeAngArr,
+                                                     makeplot=False)
+    
+    # Plot the 3 responses together
+    fig = plt.figure(figsize=(12, 8), tight_layout=True)
+    ax = fig.add_subplot(111)
+    
+    # Fast and Maxwellian
+    ax.plot(detPosArr[:, 2], detResponseFastAndMaxwellian/1e3, linewidth=3, label='Fast + Maxwellian')
+    ax.scatter(detPosArr[:, 2], detResponseFastAndMaxwellian/1e3, s=200)
+    
+    # Maxwellian only
+    ax.plot(detPosArr[:, 2], detResponseMaxwellianOnly/1e3, linewidth=3, label='Maxwellian only')
+    ax.scatter(detPosArr[:, 2], detResponseMaxwellianOnly/1e3, s=200)
+    
+    # Fast only
+    ax.plot(detPosArr[:, 2], detResponseFastOnly/1e3, linewidth=3, label='Fast only')
+    ax.scatter(detPosArr[:, 2], detResponseFastOnly/1e3, s=200)
+    
+    ax.legend()
+    ax.set_ylim(0, None)
+    ax.set_xlabel('Z [m]')
+    ax.set_ylabel('Response [counts/ms]')
+    
+    plt.show()
+
+
 if __name__ == '__tempmain__':
     """
     Used to check the angle of a specific detector to make sure it sees the core of the plasma.

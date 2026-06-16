@@ -27,6 +27,7 @@ import xarray as xr
 import subprocess
 import time
 import h5py
+import skimage
 from egedal_f_obj import *
 from itertools import chain
 import numpy as np
@@ -369,22 +370,26 @@ def dist_func_z_evol(f, vPar, vPerp, rDist, zValArr, Rmesh, Zmesh, Bmag, magneti
     # Get the magnetic flux for the distribution function at the midplane
     idx = np.abs(Rmesh[0] - rDist).argmin()
     midplaneFlux = magneticFlux[int(len(Zmesh)/2), idx]
-    
-    # Make a contour at the desired flux level
-    fig, ax = plt.subplots()
-    contour = ax.contour(Rmesh, Zmesh, magneticFlux, levels=[midplaneFlux])
-    
-    # Extract the contour path
-    paths = contour.get_paths()
 
-    plt.close(fig)
+    contours = skimage.measure.find_contours(magneticFlux, level=midplaneFlux)
 
-    if len(paths) > 0:
-        vertices = paths[0].vertices  # [r, z] pairs along the contour
+    if len(contours) > 0:
         
-        # Interpolate to get r for each z in zValArr
-        contour_interp = sc.interpolate.interp1d(vertices[:, 1], vertices[:, 0], 
-                                                 bounds_error=False, fill_value=np.nan)
+        contour = contours[0]  # shape: (N, 2), columns are [row_idx, col_idx]
+
+        # find_contours returns fractional indices — interpolate into the real
+        # coordinate arrays rather than rounding to the nearest grid point
+        z_axis = Zmesh[:, 0]  # 1D array of Z values
+        r_axis = Rmesh[0]     # 1D array of R values
+
+        z_idx_interp = sc.interpolate.interp1d(np.arange(len(z_axis)), z_axis)
+        r_idx_interp = sc.interpolate.interp1d(np.arange(len(r_axis)), r_axis)
+
+        z_vals = z_idx_interp(contour[:, 0])
+        r_vals = r_idx_interp(contour[:, 1])
+
+        contour_interp = sc.interpolate.interp1d(z_vals, r_vals,
+                                                bounds_error=False, fill_value=np.nan)
         rValArr = contour_interp(zValArr)
         
     # Make an interpolation function for |B|
@@ -474,6 +479,8 @@ def dist_func_z_evol(f, vPar, vPerp, rDist, zValArr, Rmesh, Zmesh, Bmag, magneti
         plt.show()
     
     return zEvolf, rValArr
+
+
 
 def compute_row_fz(i, nFastArr, nMaxArr, TMaxArr, RmArr, E_NBI, theta_NBI, TeArr, mu_i, ZeffArr, gridsize, rArr, zArr, Rmesh, Zmesh, Bmag, magneticFlux):
     """
@@ -865,7 +872,6 @@ def fusion_reactivity(f, vPar_1d, vPerp_1d):
     
     # Center-of-mass energy in eV
     E_cm = 0.5 * m_reduced * v_rel**2 / (sc.constants.e)
-    # print(E_cm.max())
     
     # Cross-section in m^2
     # Flatten for interpolation, then reshape back
@@ -1102,7 +1108,7 @@ if __name__ == '__main__':
     filenameEqdsk = '/home/sanwalka/synthetic_proton_detector/eqdsk/wham_hts_eqdsk_for_kunal'
     
     # Location to store the 2D fusion reactivity profile
-    savenameReactivity = '/home/sanwalka/synthetic_proton_detector/reactivity/predicted_reactivity_2d_with_maxwellian.npz'
+    savenameReactivity = '/home/sanwalka/synthetic_proton_detector/reactivity/predicted_reactivity_2d_fast_and_maxwellian.npz'
     
     # Get the r-z evolved distribution functions
     rArr = np.linspace(0, 0.1, 20)
