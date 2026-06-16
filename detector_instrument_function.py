@@ -2577,7 +2577,7 @@ if __name__ == '__main__':
     #### Fusion reactivity profile
     filenameReactivity = '/home/sanwalka/synthetic_proton_detector/reactivity/Te_2keV_NBI_2d_reactivity.npz'
     filenameReactivity = '/home/sanwalka/synthetic_proton_detector/reactivity/predicted_reactivity_2d.npz'
-    filenameReactivity = '/home/sanwalka/synthetic_proton_detector/reactivity/predicted_reactivity_2d_keisuke.npz'
+    filenameReactivity = '/home/sanwalka/synthetic_proton_detector/reactivity/predicted_reactivity_2d_with_maxwellian.npz'
     
     """
     Generate the detector response for the given-
@@ -2587,7 +2587,7 @@ if __name__ == '__main__':
     """
     
     detResponse = generate_detector_response(filenameEqdsk, filenameReactivity, detPosArr, detPhiArr, detSizeArr, bendRadArr, tubeAngArr,
-                                             makeplot=True, savename='detector_response_keisuke.npz')
+                                             makeplot=True, savename='detector_response_with_maxwellian.npz')
     
 if __name__ == '__tempmain__':
     """

@@ -141,7 +141,8 @@ def dist_func(n_fast, n_max, T_max, R_m, E_NBI, theta_NBI, T_e, mu_i, Z_eff, gri
     vPerp = vPERP
 
     # Normalize the fast ion distribution function to n_fast
-    fastDens = np.trapezoid(np.trapezoid(fFast, vPerp[:, 0], axis=0), vPar[0], axis=0)
+    integrand = 2 * np.pi * vPerp * fFast # Cylindrical coordinates jacobian
+    fastDens = np.trapezoid(np.trapezoid(integrand, vPerp[:, 0], axis=0), vPar[0], axis=0)
     fFast *= n_fast/fastDens
 
     # ======================================
@@ -155,7 +156,9 @@ def dist_func(n_fast, n_max, T_max, R_m, E_NBI, theta_NBI, T_e, mu_i, Z_eff, gri
 
     fMaxwell = np.exp(-ionMass*vTot**2/(2*tempInJoules))
 
-    maxwellDens = np.trapezoid(np.trapezoid(fMaxwell, vPerp[:, 0], axis=0), vPar[0], axis=0)
+    # Normalize the Maxwellian distribution function to n_max
+    integrand = 2 * np.pi * vPerp * fMaxwell # Cylindrical coordinates jacobian
+    maxwellDens = np.trapezoid(np.trapezoid(integrand, vPerp[:, 0], axis=0), vPar[0], axis=0)
     fMaxwell *= n_max/maxwellDens
 
     f = fFast + fMaxwell
@@ -766,7 +769,7 @@ def fusion_cross_section(makeplot=False):
         E *= 1e6
         xs /= 1e28
         
-        #Remove all the directory information from the filename
+        # Remove all the directory information from the filename
         filenameCX = filenameCX.split('/')[-1]
         
         if COFM:
@@ -862,6 +865,7 @@ def fusion_reactivity(f, vPar_1d, vPerp_1d):
     
     # Center-of-mass energy in eV
     E_cm = 0.5 * m_reduced * v_rel**2 / (sc.constants.e)
+    # print(E_cm.max())
     
     # Cross-section in m^2
     # Flatten for interpolation, then reshape back
@@ -1062,6 +1066,32 @@ if __name__ == '__tempmain__':
 
     # Calculate the z-evolved distribution function
     _, _ = dist_func_z_evol(f, vPar, vPerp, rDist, zValArr, Rmesh, Zmesh, Bmag, magneticFlux, makeplot=True)
+
+if __name__ == '__tempmain__':
+    """
+    Check that the reactivity calculation works for a single distribution function at the midplane and then plot the fusion cross section.
+    """
+
+    fusion_cross_section(makeplot=False)
+
+    # Get the distribution function data
+    vPar, vPerp, f = dist_func(n_fast = 5e18,
+                               n_max = 5e19,
+                               T_max = 0.03,
+                               R_m = 57,
+                               E_NBI = 25,
+                               theta_NBI = np.pi/4,
+                               T_e = 0.075,
+                               mu_i = 2,
+                               Z_eff = 3,
+                               gridsize = 50)
+    
+    vPar_1d = vPar[0, :]
+    vPerp_1d = vPerp[:, 0]
+
+    # Calculate the fusion reactivity of the distribution function
+    reactivity = fusion_reactivity(f, vPar_1d, vPerp_1d)
+    print(f'Fusion reactivity = {reactivity:.2e} m^3/s')
 
 if __name__ == '__main__':
     """
