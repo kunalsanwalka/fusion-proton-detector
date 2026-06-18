@@ -130,6 +130,13 @@ def dist_func(n_fast, n_max, T_max, R_m, E_NBI, theta_NBI, T_e, mu_i, Z_eff, gri
     fastDens = np.trapezoid(np.trapezoid(integrand, xsi, axis=0), v, axis=0) * 2
     fFast *= n_fast/fastDens
 
+    if makeplot:
+        # Check the integral
+        integrand = 2*np.pi * fFast * (Y**2)
+        fastDens = np.trapezoid(np.trapezoid(integrand, xsi, axis=0), v, axis=0) * 2
+        print(f'0th moment of the fast ion distribution function = {fastDens}'+r'm$^{-3}$')
+        print(f'Input fast ion density = {n_fast}'+r'm$^{-3}$')
+
     # ======================================
     # Maxwellian background component
     # ======================================
@@ -143,6 +150,13 @@ def dist_func(n_fast, n_max, T_max, R_m, E_NBI, theta_NBI, T_e, mu_i, Z_eff, gri
     integrand = 2 * np.pi * fMaxwell * (Y**2) # spherical coordinates jacobian
     maxwellDens = np.trapezoid(np.trapezoid(integrand, xsi, axis=0), v, axis=0) * 2
     fMaxwell *= n_max/maxwellDens
+
+    if makeplot:
+        # Check the integral
+        integrand = 2*np.pi * fMaxwell * (Y**2)
+        maxwellDens = np.trapezoid(np.trapezoid(integrand, xsi, axis=0), v, axis=0) * 2
+        print(f'0th moment of the maxwellian ion distribution function = {maxwellDens}'+r'm$^{-3}$')
+        print(f'Input maxwellian ion density = {n_max}'+r'm$^{-3}$')
 
     # ======================================    
     # Combined distribution function
@@ -843,98 +857,143 @@ def fusion_cross_section(makeplot=False):
     
     return
 
-def fusion_reactivity(f, vPar_1d, vPerp_1d):
+def extend_f(f, v, xsi, makeplot=False):
+    """
+    This function extends the domain of xsi from [0, 1] to [-1, 1].
+
+    This is important for fusion_reactivity where we need to account for the co and counter propagating particles.
+    The fusion cross section is very sensitive to the relative velocities of the particles.
+
+    Parameters
+    ----------
+    f : np.array
+        Density normalized distribution function.
+        1st index - pitch angle (xsi)
+        2nd index - velocity (v)
+    v : 1D numpy array  
+        Velocity grid in m/s
+    xsi : 1D numpy array
+        Normalized pitch angle.
+        Domain must be from [0, 1]
+
+    Returns
+    -------
+    f : np.array
+        Density normalized distribution function.
+        1st index - pitch angle (xsi)
+        2nd index - velocity (v)
+    v : 1D numpy array  
+        Velocity grid in m/s
+    xsi : 1D numpy array
+        Normalized pitch angle. Now extended to [-1, 1]
+    """
+
+    if makeplot:
+        # Check normalization before extension
+
+        Y, _ = np.meshgrid(v, xsi)
+        integrand = 2*np.pi * f * (Y**2)
+        maxwellDens = np.trapezoid(np.trapezoid(integrand, xsi, axis=0), v, axis=0)
+
+        print(f'density before extension = {maxwellDens}'+r'm$^{-3}$')
+        
+    #### xsi input domain is [0,1], extend the domain to [-1, 1] to account for counter-propagating particles
+    
+    # Negative branch excludes xi=0 so that column isn't duplicated
+    xi_neg = -xsi[1:][::-1]
+    xi_full_1d = np.concatenate([xi_neg, xsi])
+    
+    f_neg = f[1:, :][::-1, :]
+    f_full = np.concatenate([f_neg, f], axis=0) / 2 # keep the total density the same
+
+    if makeplot:
+        # Check normalization after extension
+
+        Y, _ = np.meshgrid(v, xi_full_1d)
+        integrand = 2*np.pi * f_full * (Y**2)
+        maxwellDens = np.trapezoid(np.trapezoid(integrand, xi_full_1d, axis=0), v, axis=0)
+
+        print(f'density after extension = {maxwellDens}'+r'm$^{-3}$')
+
+    return f_full, v, xi_full_1d
+
+def fusion_reactivity(f, v, xsi):
     """
     Calculate fusion reactivity for arbitrary 2D distribution function.
     
     Parameters:
     -----------
-    f : 2D numpy array
-        Distribution function f(v_||, v_perp) in s^3/m^6
-        Shape should match (len(vPar), len(vPerp))
-    vPar_1d : 1D numpy array  
-        Parallel velocity grid in m/s
-    vPerp_qd : 1D numpy array
-        Perpendicular velocity grid in m/s
+    f : np.array
+        Density normalized distribution function.
+        1st index - pitch angle (xsi)
+        2nd index - velocity (v)
+    v : 1D numpy array  
+        Velocity grid in m/s
+    xsi : 1D numpy array
+        Normalized pitch angle.
+        Domain must be from [0, 1]
     
     Returns:
     --------
     reactivity : float
-        Fusion reactivity <sigma*v> in m^3/s
+        Fusion reactivity Gamma in 1/(m^3*s)
     """
-   
+
+    # Extend f along xsi from [0, 1] to [-1, 1]
+    f, v, xsi = extend_f(f, v, xsi)
+
     # Reduced mass for identical particles [kg]
     m_reduced = sc.constants.m_p / 2.0
-    
-    n_par = len(vPar_1d)
-    n_perp = len(vPerp_1d)
-    
-    # print(f"Starting vectorized 4D integration over {n_perp}x{n_par}x{n_perp}x{n_par} = {n_perp*n_par*n_perp*n_par:,} points...")
-    
-    # Create 4D grids using broadcasting
-    # Dimensions: [v1_perp, v1_par, v2_perp, v2_par]
-    # Shape will be: (n_perp, n_par, n_perp, n_par)
-    
-    v1_par_4d = vPar_1d[np.newaxis, :, np.newaxis, np.newaxis]  # shape (1, n_par, 1, 1)
-    v1_perp_4d = vPerp_1d[:, np.newaxis, np.newaxis, np.newaxis]  # shape (n_perp, 1, 1, 1)
-    v2_par_4d = vPar_1d[np.newaxis, np.newaxis, np.newaxis, :]  # shape (1, 1, 1, n_par)
-    v2_perp_4d = vPerp_1d[np.newaxis, np.newaxis, :, np.newaxis]  # shape (1, 1, n_perp, 1)
-    
-    # Distribution functions in 4D
-    f1_4d = f[:, :, np.newaxis, np.newaxis]  # shape (n_perp, n_par, 1, 1)
-    f2_4d = f[np.newaxis, np.newaxis, :, :]  # shape (1, 1, n_perp, n_par)
-    
-    # print("Computing relative velocities...")
-    
-    # Calculate relative velocities
+
+    # 4D arrays for integration
+    xi1_4d = xsi[:, np.newaxis, np.newaxis, np.newaxis]
+    v1_4d  = v[np.newaxis, :, np.newaxis, np.newaxis]
+    xi2_4d = xsi[np.newaxis, np.newaxis, :, np.newaxis]
+    v2_4d  = v[np.newaxis, np.newaxis, np.newaxis, :]
+
+    # Corresponding 4D distribution functions
+    f1_4d = f[:, :, np.newaxis, np.newaxis]
+    f2_4d = f[np.newaxis, np.newaxis, :, :]
+
+    # Calculate vPerp and vPar to get the relative velocities
+    vpar1 = v1_4d * xi1_4d
+    vpar2 = v2_4d * xi2_4d
+    vperp1 = v1_4d * np.sqrt(1 - xi1_4d**2)
+    vperp2 = v2_4d * np.sqrt(1 - xi2_4d**2)
+
     # Relative parallel velocity
-    v_rel_par = v1_par_4d - v2_par_4d  # broadcasts to (n_perp, n_par, n_perp, n_par)
+    v_rel_par = vpar1 - vpar2  # broadcasts to (n_perp, n_par, n_perp, n_par)
     
     # Relative perpendicular velocity (averaged over azimuthal angle)
-    v_rel_perp_sq_avg = v1_perp_4d**2 + v2_perp_4d**2
+    v_rel_perp_sq_avg = vperp1**2 + vperp2**2
     
     # Relative speed
     v_rel = np.sqrt(v_rel_par**2 + v_rel_perp_sq_avg)
-    
-    # print("Computing center-of-mass energies...")
-    
+
     # Center-of-mass energy in eV
     E_cm = 0.5 * m_reduced * v_rel**2 / (sc.constants.e)
-    
+
     # Cross-section in m^2
     # Flatten for interpolation, then reshape back
     E_cm_flat = E_cm.flatten()
     sigma_flat = ddptFusionCXFunc(E_cm_flat)
     sigma = sigma_flat.reshape(E_cm.shape)
-    
-    # print("Computing integrand...")
-    
-    # Integrand: f1 * f2 * v_rel * sigma * (Jacobian factors)
-    # Jacobian: 2*pi*v1_perp * 2*pi*v2_perp for both particles
-    integrand = (f1_4d * f2_4d * v_rel * sigma * 
-                 (2 * np.pi * v1_perp_4d) * (2 * np.pi * v2_perp_4d))
-    
-    # print("Integrating...")
-    
-    # Perform 4D integration using trapezoidal rule
-    # Integrate over each dimension sequentially
-    dv_par = vPar_1d[1] - vPar_1d[0]
-    dv_perp = vPerp_1d[1] - vPerp_1d[0]
-    
-    # Integrate over v2_par (axis 3)
-    result = np.trapezoid(integrand, dx=dv_par, axis=3)
-    # Integrate over v2_perp (axis 2, which is now axis 2 after prev reduction)
-    result = np.trapezoid(result, dx=dv_perp, axis=2)
-    # Integrate over v1_par (axis 1)
-    result = np.trapezoid(result, dx=dv_par, axis=1)
-    # Integrate over v1_perp (axis 0)
-    reactivity = np.trapezoid(result, dx=dv_perp, axis=0)
-    
-    # For same species (D-D), divide by 2 to avoid double counting
-    reactivity /= 2
-    
-    # print("Integration complete!")
-    
+
+    # Spherical coordinate jacobians
+    jac1 = 2 * np.pi * v1_4d**2 
+    jac2 = 2 * np.pi * v2_4d**2 
+
+    # Integrand
+    integrand = f1_4d * f2_4d * jac1 * jac2 * v_rel * sigma
+
+    dv  = v[1] - v[0]
+    dxi = xsi[1] - xsi[0]
+
+    result = np.trapezoid(integrand, dx=dv, axis=3)    # integrate over v2
+    result = np.trapezoid(result, dx=dxi, axis=2)      # integrate over xsi2
+    result = np.trapezoid(result, dx=dv, axis=1)       # integrate over v1
+    reactivity = np.trapezoid(result, dx=dxi, axis=0)  # integrate over xsi1
+
     return reactivity
 
 def compute_row_reactivity(i, f_rz, vPar_1d, vPerp_1d):
@@ -1047,7 +1106,7 @@ if __name__ == '__tempmain__':
     vPar, vPerp, zArr2D, rArr2D, f_rz = dist_func_rz_pleiades(filenamePleiades, filenameEqdsk)
 
 # Plot f at midplane
-if __name__ == '__main__':
+if __name__ == '__tempmain__':
     """
     Plot the distribution function at the midplane
     """
@@ -1111,8 +1170,8 @@ if __name__ == '__tempmain__':
     # Calculate the z-evolved distribution function
     _, _ = dist_func_z_evol(f, vPar, vPerp, rDist, zValArr, Rmesh, Zmesh, Bmag, magneticFlux, makeplot=True)
 
-# Calculate reactivity along z for 1 flux tube
-if __name__ == '__tempmain__':
+# Calculate reactivity for a single distribution function at the midplane
+if __name__ == '__main__':
     """
     Test to see if the fusion reactivity calculator is working properly
     """
@@ -1122,26 +1181,32 @@ if __name__ == '__tempmain__':
     # =============================================
 
     # Generate a maxwellian with 10keV
-    vPar, vPerp, f = dist_func(n_fast = 5,
-                               n_max = 5e19,
-                               T_max = 10,
-                               R_m = 57,
-                               E_NBI = 25,
-                               theta_NBI = np.pi/4,
-                               T_e = 0.075,
-                               mu_i = 2,
-                               Z_eff = 3,
-                               gridsize = 50,
-                               makeplot = True)
+    vel, xsi, f = dist_func(n_fast = 5,
+                            n_max = 5e19,
+                            T_max = 10,
+                            R_m = 57,
+                            E_NBI = 250,
+                            theta_NBI = np.pi/4,
+                            T_e = 0.075,
+                            mu_i = 2,
+                            Z_eff = 3,
+                            gridsize = 50,
+                            makeplot = True)
     
-    vPar_1d = vPar[0, :]
-    vPerp_1d = vPerp[:, 0]
+    vel_1d = vel[0, :]
+    xsi_1d = xsi[:, 0]
+
+    # Extend the distribution function
+    _, _, _ = extend_f(f, vel_1d, xsi_1d, makeplot=True)
 
     fusion_cross_section()
-    reactivity = fusion_reactivity(f, vPar_1d, vPerp_1d)
+    reactivity = fusion_reactivity(f, vel_1d, xsi_1d)
 
-    print(reactivity)
+    print(reactivity/1e13)
     
+# Calculate the reactivity along z for a given flux tube
+if __name__ == '__tempmain__':
+
     # =============================================
     # Test with a z-evolved maxwellian
     # =============================================
@@ -1175,6 +1240,7 @@ if __name__ == '__tempmain__':
     reactivity1D = np.zeros(shape=len(zArr))
 
     # Calculate the reactivity at each z position
+    fusion_cross_section()
     for i in range(len(zArr)):
 
         reactivity1D[i] = fusion_reactivity(zEvolF[i], vPar_1d, vPerp_1d)

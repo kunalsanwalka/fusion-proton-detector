@@ -162,6 +162,10 @@ def dist_func(n_fast, n_max, T_max, R_m, E_NBI, theta_NBI, T_e, mu_i, Z_eff, gri
     maxwellDens = np.trapezoid(np.trapezoid(integrand, vPerp[:, 0], axis=0), vPar[0], axis=0)
     fMaxwell *= n_max/maxwellDens
 
+    # Remove all particles with velocity larger than vNBI
+    totalV = np.sqrt(vPar**2 + vPerp**2)
+    fMaxwell[totalV>vNBI] = 0
+
     # ======================================    
     # Combined distribution function
     # ======================================
@@ -1125,7 +1129,7 @@ if __name__ == '__tempmain__':
     _, _ = dist_func_z_evol(f, vPar, vPerp, rDist, zValArr, Rmesh, Zmesh, Bmag, magneticFlux, makeplot=True)
 
 # Calculate reactivity along z for 1 flux tube
-if __name__ == '__tempmain__':
+if __name__ == '__main__':
     """
     Test to see if the fusion reactivity calculator is working properly
     """
@@ -1155,6 +1159,9 @@ if __name__ == '__tempmain__':
 
     print(reactivity)
     
+# Calculate the reactivity along z for a given flux tube
+if __name__ == '__tempmain__':
+
     # =============================================
     # Test with a z-evolved maxwellian
     # =============================================
@@ -1188,6 +1195,7 @@ if __name__ == '__tempmain__':
     reactivity1D = np.zeros(shape=len(zArr))
 
     # Calculate the reactivity at each z position
+    fusion_cross_section()
     for i in range(len(zArr)):
 
         reactivity1D[i] = fusion_reactivity(zEvolF[i], vPar_1d, vPerp_1d)
