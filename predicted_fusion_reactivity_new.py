@@ -154,27 +154,15 @@ def dist_func(n_fast, n_max, T_max, R_m, E_NBI, theta_NBI, T_e, mu_i, Z_eff, gri
     if makeplot == True:
         
         # Convert the velocity grids to vPar and vPerp for plotting
-        theta = np.arccos(X)
-        vPar = Y*np.cos(theta)
-        vPerp = Y*np.sin(theta)
-        
-        # Make a uniform grid in vPar and vPerp
-        vPAR, vPERP = np.meshgrid(np.linspace(0, vNBI, gridsize), np.linspace(0, vNBI, gridsize))
-        
-        # Put the distribution function on the uniform grid
-        f1D = f.flatten()
-        vPerp1D = vPerp.flatten()
-        vPar1D = vPar.flatten()
-        velPoints = np.array([vPar1D, vPerp1D]).T
-        
-        fOnGrid = sc.interpolate.griddata(velPoints, f1D, (vPAR, vPERP), method='cubic', fill_value=0)
+        vPar = Y * X
+        vPerp = Y * np.sqrt(1-X**2)
 
         fig = plt.figure(figsize=(10, 8), tight_layout=True)
         ax = fig.add_subplot(111)
         
         # Normalize first, then clip to log-safe minimum BEFORE passing to contourf
-        f_norm = fOnGrid / np.max(fOnGrid)
-        vmin_log = 1e-4
+        f_norm = f / np.max(f)
+        vmin_log = 1e-6
         f_norm = np.clip(f_norm, a_min=vmin_log, a_max=1)  # kill exact zeros
         
         levels = np.logspace(np.log10(vmin_log), 0, 100)   # log-spaced levels
@@ -186,8 +174,8 @@ def dist_func(n_fast, n_max, T_max, R_m, E_NBI, theta_NBI, T_e, mu_i, Z_eff, gri
         
         cbar = fig.colorbar(pltObj, ax=ax)
         cbar.set_label(r'f/f$_{max}$')
-        cbar.set_ticks([1e-4, 1e-3, 1e-2, 1e-1, 1e0])
-        cbar.set_ticklabels([r'$10^{-4}$', r'$10^{-3}$', r'$10^{-2}$', r'$10^{-1}$', r'$10^{0}$'])
+        cbar.set_ticks([1e-6, 1e-5, 1e-4, 1e-3, 1e-2, 1e-1, 1e0])
+        cbar.set_ticklabels([r'$10^{-6}$', r'$10^{-5}$', r'$10^{-4}$', r'$10^{-3}$', r'$10^{-2}$', r'$10^{-1}$', r'$10^{0}$'])
         
         # Add a text box with the plasma parameters
         textstr = '\n'.join((
@@ -196,8 +184,8 @@ def dist_func(n_fast, n_max, T_max, R_m, E_NBI, theta_NBI, T_e, mu_i, Z_eff, gri
             r'$Z_{eff}$ = '+str(Z_eff),
             r'$R_m$ = '+str(R_m)))
         props = dict(boxstyle='round', facecolor='white', alpha=1)
-        ax.text(0.05, 0.95, textstr, transform=ax.transAxes, fontsize=22,
-                horizontalalignment='left', verticalalignment='top', bbox=props)
+        ax.text(0.95, 0.95, textstr, transform=ax.transAxes, fontsize=22,
+                horizontalalignment='right', verticalalignment='top', bbox=props)
         
         ax.set_aspect('equal')
         ax.set_xlabel(r'$v_{||}/v_0$')
@@ -327,7 +315,7 @@ def magnetic_equilibrium(filenameEqdsk, makeplot=False):
     
     return Rmesh, Zmesh, Br, Bz, Bmag, magneticFlux
 
-def dist_func_z_evol(f, vPar, vPerp, rDist, zValArr, Rmesh, Zmesh, Bmag, magneticFlux, makeplot=False):
+def dist_func_z_evol(f, Y, X, rDist, zValArr, Rmesh, Zmesh, Bmag, magneticFlux, makeplot=False):
     """
     This function evolves the distribution along z for a given magnetic
     equilibrium. It does this via the mu (1st adiabatic invariant) 
@@ -337,12 +325,14 @@ def dist_func_z_evol(f, vPar, vPerp, rDist, zValArr, Rmesh, Zmesh, Bmag, magneti
     ----------
     f : np.array
         2D distribution function.
-    vPar : np.array
-        v_|| array. [m/s OR normalized]
-        Units can be m/s OR normalized. As long as vPar and vPerp units match.
-    vPerp : np.array
-        v_perp array. [m/s OR normalized]
-        Units can be m/s OR normalized. As long as vPar and vPerp units match.
+    Y : np.array
+        Velocity array.
+        To get the 1D array, use Y[0,:].
+        Units - m/s
+    X : np.array
+        Normalized pitch angle array.
+        To get the 1D array, use X[:,0].
+        Units - normalized. 0 = v_perp ; 1 = v_par
     rDist : float
         Radial distance where this distribution function is calculated from the
         midplane. [m]
