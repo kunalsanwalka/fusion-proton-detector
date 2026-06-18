@@ -1015,6 +1015,10 @@ def fusion_reactivity_rz(vPar, vPerp, zArr2D, rArr2D, f_rz, makeplot=False, save
         results = pool.map(worker, range(zArr2D.shape[0]))
 
         for i, row in results:
+
+            # Smooth the reactivity along z as it is spiky from interpolation errors
+            row = sc.signal.savgol_filter(row, window_length=5, polyorder=2)
+
             reactivity2D[i] = row
 
     if makeplot == True:
@@ -1183,7 +1187,7 @@ if __name__ == '__tempmain__':
     zArr = np.linspace(0, 0.8, 50)
 
     # Evolve f along z
-    zEvolF, rValArr = dist_func_z_evol(f, vPar, vPerp, 0, zArr, Rmesh, Zmesh, Bmag, magneticFlux)
+    zEvolF, rValArr = dist_func_z_evol(f, vPar, vPerp, 0.06, zArr, Rmesh, Zmesh, Bmag, magneticFlux)
 
     reactivity1D = np.zeros(shape=len(zArr))
 
@@ -1227,7 +1231,7 @@ if __name__ == '__tempmain__':
     vPerp_1d = vPerp[:, 0]
 
     # Evolve f along z
-    zEvolF, rValArr = dist_func_z_evol(f, vPar, vPerp, 0, zArr, Rmesh, Zmesh, Bmag, magneticFlux)
+    zEvolF, rValArr = dist_func_z_evol(f, vPar, vPerp, 0.06, zArr, Rmesh, Zmesh, Bmag, magneticFlux)
 
     reactivity1D = np.zeros(shape=len(zArr))
 
@@ -1252,7 +1256,7 @@ if __name__ == '__tempmain__':
     plt.show()
     
 # Calculate 2D reactivity profile
-if __name__ == '__tempmain__':
+if __name__ == '__main__':
     """
     Calculate the 2D fusion reactivity profile
     """
@@ -1264,7 +1268,7 @@ if __name__ == '__tempmain__':
     savenameReactivity = '/home/sanwalka/synthetic_proton_detector/reactivity/predicted_reactivity_2d_faster_interpolator.npz'
     
     # Get the r-z evolved distribution functions
-    rArr = np.linspace(0, 0.1, 5)
+    rArr = np.linspace(0, 0.1, 10)
     zArr = np.linspace(0, 0.8, 50)
 
     # Use density and temperature profiles from Keisuke's paper.
