@@ -13,3 +13,6 @@ plots/
 
 # Ignore eqdsk files
 eqdsk/
+
+# Ignore particle tracks
+particle_tracks/
