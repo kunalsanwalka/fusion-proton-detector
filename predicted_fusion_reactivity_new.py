@@ -329,7 +329,7 @@ def magnetic_equilibrium(filenameEqdsk, makeplot=False):
     
     return Rmesh, Zmesh, Br, Bz, Bmag, magneticFlux
 
-def dist_func_z_evol(f, Y, X, rDist, zValArr, Rmesh, Zmesh, Bmag, magneticFlux, makeplot=False):
+def dist_func_z_evol(f, vel, xsi, rDist, zValArr, Rmesh, Zmesh, Bmag, magneticFlux, makeplot=False):
     """
     This function evolves the distribution along z for a given magnetic
     equilibrium. It does this via the mu (1st adiabatic invariant) 
@@ -339,11 +339,11 @@ def dist_func_z_evol(f, Y, X, rDist, zValArr, Rmesh, Zmesh, Bmag, magneticFlux, 
     ----------
     f : np.array
         2D distribution function.
-    Y : np.array
+    vel : np.array
         Velocity array.
         To get the 1D array, use Y[0,:].
         Units - m/s
-    X : np.array
+    xsi : np.array
         Normalized pitch angle array.
         To get the 1D array, use X[:,0].
         Units - normalized. 0 = v_perp ; 1 = v_par
@@ -420,40 +420,37 @@ def dist_func_z_evol(f, Y, X, rDist, zValArr, Rmesh, Zmesh, Bmag, magneticFlux, 
     # =======================================================================
 
     zEvolf = np.zeros(shape=(len(zValArr), *f.shape))
+    xsi_1d = xsi[:, 0]
     
-    # Precompute all transformed grids at once (vectorized over z)
-    b = bNormArr[:, None, None]          # shape (Nz, 1, 1)
-    vPerpNew = vPerp[None] * np.sqrt(b)  # shape (Nz, Nperp, Npar)
-    vParNew  = np.sqrt(vPar[None]**2 + vPerp[None]**2 * (1 - b))
-
-    # Smooth the data BEFORE interpolation. This helps knock down some of the spikes
-    fSmooth = sc.ndimage.gaussian_filter(f, sigma=2)
-
-    # Flatted f (used for interpolation)
-    distDataFlat = fSmooth.ravel()
-
     for i in range(len(zValArr)):
     
-        # Get the velocity grids at the current z position
-        vPerpFlat = vPerpNew[i].ravel()
-        vParFlat  = vParNew[i].ravel()
+        b = bNormArr[i]
 
-        # Ignore points where vPar is NaN (trapped particles that don't make it out as far)
-        valid  = ~np.isnan(vParFlat)
-        points = np.column_stack((vParFlat[valid], vPerpFlat[valid]))
-        values = distDataFlat[valid]
-
-        # Triangulate the data
-        tri = sc.spatial.Delaunay(points)
-        # Build the interpolator
-        interp = sc.interpolate.CloughTocher2DInterpolator(tri, values, fill_value=0.0)
-
-        # Extract the result
-        result = interp(vPar, vPerp)
-        
-        # Smooth the output to knock down spikes again
-        result = sc.signal.savgol_filter(result, window_length=5, polyorder=2, axis=0)
-        result = sc.signal.savgol_filter(result, window_length=5, polyorder=2, axis=1)
+        # xsi(z)^2 = 1 - b*(1 - xsi0^2); negative => particle mirrors before
+        # reaching this z (trapped), so exclude it.
+        arg = 1.0 - b * (1.0 - xsi_1d**2)
+        valid = arg >= 0
+ 
+        xsiNew = np.sign(xsi_1d) * np.sqrt(np.clip(arg, 0, None))
+ 
+        xsiNew_valid = xsiNew[valid]
+        f_valid = f[valid, :]
+ 
+        # Sort by the new xsi value (robust regardless of xsi_1d's original
+        # ordering, and correctly stitches together the +/- branches)
+        order = np.argsort(xsiNew_valid)
+        xsiNew_sorted = xsiNew_valid[order]
+        f_sorted = f_valid[order, :]
+ 
+        # One interpolation call handles every v column at once, since the
+        # xsi remap doesn't depend on v
+        interp = sc.interpolate.interp1d(xsiNew_sorted, f_sorted, 
+                                         axis=0, 
+                                         kind='linear', 
+                                         bounds_error=False, 
+                                         fill_value=(f_sorted[0], f_sorted[-1]))
+ 
+        result = interp(xsi_1d)
 
         # Clean up and add to zEvolf
         result[result < 0] = 0.0
@@ -461,6 +458,10 @@ def dist_func_z_evol(f, Y, X, rDist, zValArr, Rmesh, Zmesh, Bmag, magneticFlux, 
     
     if makeplot == True:
         
+        # Convert the velocity grids to vPar and vPerp for plotting
+        vPar = vel * xsi
+        vPerp = vel * np.sqrt(1-xsi**2)
+
         fig = plt.figure(figsize=(12, 16), tight_layout=True)
 
         #### Midplane plot
@@ -471,7 +472,7 @@ def dist_func_z_evol(f, Y, X, rDist, zValArr, Rmesh, Zmesh, Bmag, magneticFlux, 
         index = 0
         normVal = np.max(zEvolf[index])
         f_norm = zEvolf[index] / normVal
-        vmin_log = 1e-4
+        vmin_log = 1e-6
         f_norm = np.clip(f_norm, a_min=vmin_log, a_max=1)  # kill exact zeros
         
         levels = np.logspace(np.log10(vmin_log), 0, 100)   # log-spaced levels
@@ -483,8 +484,8 @@ def dist_func_z_evol(f, Y, X, rDist, zValArr, Rmesh, Zmesh, Bmag, magneticFlux, 
         
         cbar = fig.colorbar(pltObj, ax=ax)
         cbar.set_label(r'f/f$_{max}$')
-        cbar.set_ticks([1e-4, 1e-3, 1e-2, 1e-1, 1e0])
-        cbar.set_ticklabels([r'$10^{-4}$', r'$10^{-3}$', r'$10^{-2}$', r'$10^{-1}$', r'$10^{0}$'])
+        cbar.set_ticks([1e-6, 1e-4, 1e-2, 1e0])
+        cbar.set_ticklabels([r'$10^{-6}$', r'$10^{-4}$', r'$10^{-2}$', r'$10^{0}$'])
         
         ax.set_aspect('equal')
         ax.set_xlabel(r'$v_{||}/v_0$')
@@ -511,8 +512,8 @@ def dist_func_z_evol(f, Y, X, rDist, zValArr, Rmesh, Zmesh, Bmag, magneticFlux, 
         
         cbar = fig.colorbar(pltObj, ax=ax)
         cbar.set_label(r'f/f$_{max}$')
-        cbar.set_ticks([1e-4, 1e-3, 1e-2, 1e-1, 1e0])
-        cbar.set_ticklabels([r'$10^{-4}$', r'$10^{-3}$', r'$10^{-2}$', r'$10^{-1}$', r'$10^{0}$'])
+        cbar.set_ticks([1e-6, 1e-4, 1e-2, 1e0])
+        cbar.set_ticklabels([r'$10^{-6}$', r'$10^{-4}$', r'$10^{-2}$', r'$10^{0}$'])
         
         ax.set_aspect('equal')
         ax.set_xlabel(r'$v_{||}/v_0$')
@@ -1136,24 +1137,16 @@ if __name__ == '__tempmain__':
 
     #########################################################################################
     #### HTPD 2026 Plot
-    vPar, vPerp, f = dist_func(n_fast = 5e18,
-                               n_max = 5e19,
-                               T_max = 1,
-                               R_m = 57,
-                               E_NBI = 25,
-                               theta_NBI = np.pi/4,
-                               T_e = 0.075,
-                               mu_i = 2,
-                               Z_eff = 3,
-                               gridsize = 500)
-
-    print('Maximum values of the midlane distribution function-')
-    print(vPar.max(), vPerp.max(), f.max())
-    print('****************************************************')
-
-    print('Minimum values of the midlane distribution function-')
-    print(vPar.min(), vPerp.min(), f.min())
-    print('****************************************************')
+    vel, xsi, f = dist_func(n_fast = 5e18,
+                            n_max = 5e19,
+                            T_max = 1,
+                            R_m = 57,
+                            E_NBI = 25,
+                            theta_NBI = np.pi/4,
+                            T_e = 0.075,
+                            mu_i = 2,
+                            Z_eff = 3,
+                            gridsize = 500)
     
     # Location of magnetic equilibrium file
     filenameEqdsk = '/home/sanwalka/synthetic_proton_detector/eqdsk/wham_hts_eqdsk_for_kunal'
@@ -1168,10 +1161,10 @@ if __name__ == '__tempmain__':
     zValArr = np.linspace(0, 0.8, 20)
 
     # Calculate the z-evolved distribution function
-    _, _ = dist_func_z_evol(f, vPar, vPerp, rDist, zValArr, Rmesh, Zmesh, Bmag, magneticFlux, makeplot=True)
+    zEvolF, rValArr = dist_func_z_evol(f, vel, xsi, rDist, zValArr, Rmesh, Zmesh, Bmag, magneticFlux, makeplot=True)
 
 # Calculate reactivity for a single distribution function at the midplane
-if __name__ == '__main__':
+if __name__ == '__tempmain__':
     """
     Test to see if the fusion reactivity calculator is working properly
     """

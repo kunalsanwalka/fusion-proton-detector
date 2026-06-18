@@ -1087,7 +1087,7 @@ if __name__ == '__tempmain__':
     # vPar, vPerp, zArr2D, rArr2D, f_rz = dist_func_rz_cql3d(filenameCQL3D)
 
 # Plot f at z-positions
-if __name__ == '__tempmain__':
+if __name__ == '__main__':
     """
     Plot the distribution function at 2 z-positions
     """
@@ -1129,7 +1129,7 @@ if __name__ == '__tempmain__':
     _, _ = dist_func_z_evol(f, vPar, vPerp, rDist, zValArr, Rmesh, Zmesh, Bmag, magneticFlux, makeplot=True)
 
 # Calculate reactivity along z for 1 flux tube
-if __name__ == '__main__':
+if __name__ == '__tempmain__':
     """
     Test to see if the fusion reactivity calculator is working properly
     """
