@@ -18,35 +18,48 @@ os.environ["MKL_NUM_THREADS"] = "1"
 os.environ["OPENBLAS_NUM_THREADS"] = "1"
 os.environ["NUMEXPR_NUM_THREADS"] = "1"
 
-print('predicted_fusion_reactivity.py')
-print("OMP_NUM_THREADS =", os.environ.get("OMP_NUM_THREADS"))
-print("MKL_NUM_THREADS =", os.environ.get("MKL_NUM_THREADS"))
-print("OPENBLAS_NUM_THREADS =", os.environ.get("OPENBLAS_NUM_THREADS"))
+# print('predicted_fusion_reactivity.py')
+# print("OMP_NUM_THREADS =", os.environ.get("OMP_NUM_THREADS"))
+# print("MKL_NUM_THREADS =", os.environ.get("MKL_NUM_THREADS"))
+# print("OPENBLAS_NUM_THREADS =", os.environ.get("OPENBLAS_NUM_THREADS"))
 
-# Change the plotting to use TkAgg
-import matplotlib
-# matplotlib.use('TkAgg')
-
+import xarray as xr
 import subprocess
 import time
+import h5py
+import skimage
 from egedal_f_obj import *
 from itertools import chain
 import numpy as np
 import scipy as sc
 import matplotlib.pyplot as plt
+import matplotlib.colors as colors
 from multiprocessing import Pool, cpu_count
 from functools import partial
-plt.rcParams.update({'font.size': 14})
 
-def dist_func(n, R_m, E_NBI, theta_NBI, T_e, mu_i, Z_eff, gridsize=100, makeplot=False):
+# Use TkAgg for interactive plotting
+plt.switch_backend('TkAgg')
+
+# Change the font size
+plt.rcParams.update({'font.size': 26})
+
+global plotDir
+plotDir = '/home/sanwalka/synthetic_proton_detector/plots/'
+
+def dist_func(n_fast, n_max, T_max, R_m, E_NBI, theta_NBI, T_e, mu_i, Z_eff, gridsize=100, 
+              makeplot=False, savename=None):
     """
     This function calculates the distribution function at the midplane for a
     given set of plasma parameters
 
     Parameters
     ----------
-    n : float
-        Plasma density (used for normalization). [particles / m^-3] 
+    n_fast : float
+        Fast ion plasma density (used for normalization). [particles / m^-3]
+    n_max : float
+        Maxwellian background plasma density (used for normalization). [particles / m^-3]
+    T_max : float
+        Maxwellian background plasma temperature. [keV]
     R_m : float
         Mirror ratio.
     E_NBI : float
@@ -63,7 +76,11 @@ def dist_func(n, R_m, E_NBI, theta_NBI, T_e, mu_i, Z_eff, gridsize=100, makeplot
     gridsize : int
         Size of the velocity grid in 1 dimension
     makeplot : boolean, optional
-        Make a plot of the distribution function. The default is False.
+        Make a plot of the distribution function. 
+        The default is False.
+    savename : string, optional
+        Name of the file to save the plot as. 
+        The default is None.
 
     Returns
     -------
@@ -79,6 +96,10 @@ def dist_func(n, R_m, E_NBI, theta_NBI, T_e, mu_i, Z_eff, gridsize=100, makeplot
     q = sc.constants.e
     m_p = sc.constants.m_p
     
+    # ======================================
+    # Fast ion component via egedal
+    # ======================================
+
     # Injection velocity of the NBI [m/s]
     vNBI = (2*1e3*E_NBI*q/(m_p*mu_i))**0.5
     
@@ -99,11 +120,6 @@ def dist_func(n, R_m, E_NBI, theta_NBI, T_e, mu_i, Z_eff, gridsize=100, makeplot
     # Obtain the distribution function
     f = fObj.f(Y, X)
     
-    # Calculate the density at the midplane
-    n_f = fObj.n(1)
-    # Normalize the distribution function by the density
-    f *= n/n_f
-    
     # Convert the velocity grids to vPar and vPerp
     theta = np.arccos(X)
     vPar = Y*np.cos(theta)
@@ -121,25 +137,82 @@ def dist_func(n, R_m, E_NBI, theta_NBI, T_e, mu_i, Z_eff, gridsize=100, makeplot
     fOnGrid = sc.interpolate.griddata(velPoints, f1D, (vPAR, vPERP), method='cubic', fill_value=0)
     
     # Rename stuff
-    f = fOnGrid
+    fFast = fOnGrid
     vPar = vPAR
     vPerp = vPERP
-    
+
+    # Normalize the fast ion distribution function to n_fast
+    integrand = 2 * np.pi * vPerp * fFast # Cylindrical coordinates jacobian
+    fastDens = np.trapezoid(np.trapezoid(integrand, vPerp[:, 0], axis=0), vPar[0], axis=0)
+    fFast *= n_fast/fastDens
+
+    # ======================================
+    # Maxwellian background component
+    # ======================================
+
+    vTot = np.sqrt(vPar**2 + vPerp**2)
+
+    tempInJoules = T_max*1e3*q
+    ionMass = m_p*mu_i
+
+    fMaxwell = np.exp(-ionMass*vTot**2/(2*tempInJoules))
+
+    # Normalize the Maxwellian distribution function to n_max
+    integrand = 2 * np.pi * vPerp * fMaxwell # Cylindrical coordinates jacobian
+    maxwellDens = np.trapezoid(np.trapezoid(integrand, vPerp[:, 0], axis=0), vPar[0], axis=0)
+    fMaxwell *= n_max/maxwellDens
+
+    # Remove all particles with velocity larger than vNBI
+    totalV = np.sqrt(vPar**2 + vPerp**2)
+    fMaxwell[totalV>vNBI] = 0
+
+    # ======================================    
+    # Combined distribution function
+    # ======================================
+
+    f = fFast + fMaxwell
+    f = np.clip(f, a_min=0, a_max=None)
+
     if makeplot == True:
         
-        fig = plt.figure(figsize=(12, 8), tight_layout=True)
+        fig = plt.figure(figsize=(10, 8), tight_layout=True)
         ax = fig.add_subplot(111)
         
-        pltObj = ax.contourf(vPar/vNBI, vPerp/vNBI, f, levels = 100)
+        # Normalize first, then clip to log-safe minimum BEFORE passing to contourf
+        f_norm = f / np.max(f)
+        vmin_log = 1e-4
+        f_norm = np.clip(f_norm, a_min=vmin_log, a_max=1)  # kill exact zeros
         
-        cbar = fig.colorbar(pltObj)
+        levels = np.logspace(np.log10(vmin_log), 0, 100)   # log-spaced levels
+        
+        pltObj = ax.contourf(vPar/vNBI, vPerp/vNBI, f_norm,
+                             norm=colors.LogNorm(vmin=vmin_log, vmax=1),
+                             levels=levels,
+                             extend='neither')
+        
+        cbar = fig.colorbar(pltObj, ax=ax)
+        cbar.set_label(r'f/f$_{max}$')
+        cbar.set_ticks([1e-4, 1e-3, 1e-2, 1e-1, 1e0])
+        cbar.set_ticklabels([r'$10^{-4}$', r'$10^{-3}$', r'$10^{-2}$', r'$10^{-1}$', r'$10^{0}$'])
+        
+        # Add a text box with the plasma parameters
+        textstr = '\n'.join((
+            r'$E_{NBI}$ = '+str(E_NBI)+r' keV',
+            r'$T_e$ = '+str(int(T_e*1e3))+r' eV',
+            r'$Z_{eff}$ = '+str(Z_eff),
+            r'$R_m$ = '+str(R_m)))
+        props = dict(boxstyle='round', facecolor='white', alpha=1)
+        ax.text(0.05, 0.95, textstr, transform=ax.transAxes, fontsize=22,
+                horizontalalignment='left', verticalalignment='top', bbox=props)
         
         ax.set_aspect('equal')
         ax.set_xlabel(r'$v_{||}/v_0$')
         ax.set_ylabel(r'$v_{\perp}/v_0$')
-        ax.set_title(r'$E_{NBI}$ = '+str(E_NBI)+r'keV; $T_e$= '+str(T_e)+r'keV; $Z_{eff}$ = '+str(Z_eff), 
-                     pad=45)
+        ax.set_title(r'$f_{z=0}(v_{||}, v_{\perp})$')
         
+        if savename is not None:
+            plt.savefig(plotDir+savename, dpi=300)
+
         plt.show()
         
     return vPar, vPerp, f
@@ -302,22 +375,33 @@ def dist_func_z_evol(f, vPar, vPerp, rDist, zValArr, Rmesh, Zmesh, Bmag, magneti
         r-values that map along the flux tube specified by rDist.
     """
     
+    # ==================================================================
+    # Magnetic field strength along the flux tube
+    # ==================================================================
+
     # Get the magnetic flux for the distribution function at the midplane
     idx = np.abs(Rmesh[0] - rDist).argmin()
     midplaneFlux = magneticFlux[int(len(Zmesh)/2), idx]
-    
-    # Make a contour at the desired flux level
-    contour = plt.contour(Rmesh, Zmesh, magneticFlux, levels=[midplaneFlux])
-    plt.close()
-    
-    # Extract the contour path
-    paths = contour.get_paths()
-    if len(paths) > 0:
-        vertices = paths[0].vertices  # [r, z] pairs along the contour
-        
-        # Interpolate to get r for each z in zValArr
-        contour_interp = sc.interpolate.interp1d(vertices[:, 1], vertices[:, 0], 
-                                                 bounds_error=False, fill_value=np.nan)
+
+    contours = skimage.measure.find_contours(magneticFlux, level=midplaneFlux)
+
+    if len(contours) > 0:
+
+        contour = contours[0]  # shape: (N, 2), columns are [row_idx, col_idx]
+
+        # find_contours returns fractional indices — interpolate into the real
+        # coordinate arrays rather than rounding to the nearest grid point
+        z_axis = Zmesh[:, 0]  # 1D array of Z values
+        r_axis = Rmesh[0]     # 1D array of R values
+
+        z_idx_interp = sc.interpolate.interp1d(np.arange(len(z_axis)), z_axis)
+        r_idx_interp = sc.interpolate.interp1d(np.arange(len(r_axis)), r_axis)
+
+        z_vals = z_idx_interp(contour[:, 0])
+        r_vals = r_idx_interp(contour[:, 1])
+
+        contour_interp = sc.interpolate.interp1d(z_vals, r_vals,
+                                                bounds_error=False, fill_value=np.nan)
         rValArr = contour_interp(zValArr)
         
     # Make an interpolation function for |B|
@@ -332,97 +416,132 @@ def dist_func_z_evol(f, vPar, vPerp, rDist, zValArr, Rmesh, Zmesh, Bmag, magneti
     
     # B/B_0
     bNormArr = bMagArr/bNorm
+
+    # =======================================================================
+    # Evolve the distribution function along z due to mu and E conservation
+    # =======================================================================
+
+    zEvolf = np.zeros(shape=(len(zValArr), *f.shape))
     
-    # Evolve the distribution function along z due to mu conservation
-    zEvolf = np.zeros(shape=(len(zValArr), len(f), len(f[0])))
-    
+    # Precompute all transformed grids at once (vectorized over z)
+    b = bNormArr[:, None, None]          # shape (Nz, 1, 1)
+    vPerpNew = vPerp[None] * np.sqrt(b)  # shape (Nz, Nperp, Npar)
+    vParNew  = np.sqrt(vPar[None]**2 + vPerp[None]**2 * (1 - b))
+
+    # Smooth the data BEFORE interpolation. This helps knock down some of the spikes
+    fSmooth = sc.ndimage.gaussian_filter(f, sigma=2)
+
+    # Flatted f (used for interpolation)
+    distDataFlat = fSmooth.ravel()
+
     for i in range(len(zValArr)):
+    
+        # Get the velocity grids at the current z position
+        vPerpFlat = vPerpNew[i].ravel()
+        vParFlat  = vParNew[i].ravel()
+
+        # Ignore points where vPar is NaN (trapped particles that don't make it out as far)
+        valid  = ~np.isnan(vParFlat)
+        points = np.column_stack((vParFlat[valid], vPerpFlat[valid]))
+        values = distDataFlat[valid]
+
+        # Triangulate the data
+        tri = sc.spatial.Delaunay(points)
+        # Build the interpolator
+        interp = sc.interpolate.CloughTocher2DInterpolator(tri, values, fill_value=0.0)
+
+        # Extract the result
+        result = interp(vPar, vPerp)
         
-        # Evolve the vPerp array
-        vPerpNew = vPerp*np.sqrt(bNormArr[i])
-        
-        # Evolve the vPar array
-        vParNew = np.sqrt(vPar**2 + (vPerp**2)*(1-bNormArr[i]))
-        
-        # We removed all the negative vPar values when we squared and square-
-        # rooted. Manually adding them back.
-        vParPositive = vParNew[: , int(len(vPar[0])/2):]
-        vParNegative = -vParNew[: , :int(len(vPar[0])/2)]
-        
-        vParNew[: , int(len(vPar[0])/2):] = vParPositive
-        vParNew[: , :int(len(vPar[0])/2)] = vParNegative
-        
-        # Flatten everything to 1D
-        distDataFlat = list(chain.from_iterable(f))
-        vPerpFlat = list(chain.from_iterable(vPerpNew))
-        vParFlat = list(chain.from_iterable(vParNew))
-        
-        # Convert to numpy
-        distDataFlat = np.array(distDataFlat)
-        vPerpFlat = np.array(vPerpFlat)
-        vParFlat = np.array(vParFlat)
-        
-        # Remove all entries where vPar == nan
-        distDataFlat = distDataFlat[~np.isnan(vParFlat)]
-        vPerpFlat = vPerpFlat[~np.isnan(vParFlat)]
-        vParFlat = vParFlat[~np.isnan(vParFlat)]
-        
-        # List of tuples for the gridddata function
-        velPoints = np.array((vParFlat,vPerpFlat)).T
-        
-        # Put the data on a regular grid
-        zEvolf[i] = sc.interpolate.griddata(velPoints, distDataFlat, (vPar,vPerp), method='cubic', fill_value=0)
-        
-        # Set all negative values to 0
-        zEvolf[i][zEvolf[i] < 0] = 0
+        # Smooth the output to knock down spikes again
+        result = sc.signal.savgol_filter(result, window_length=5, polyorder=2, axis=0)
+        result = sc.signal.savgol_filter(result, window_length=5, polyorder=2, axis=1)
+
+        # Clean up and add to zEvolf
+        result[result < 0] = 0.0
+        zEvolf[i] = result
     
     if makeplot == True:
         
         fig = plt.figure(figsize=(12, 16), tight_layout=True)
-        
+
+        #### Midplane plot
+                
         ax = fig.add_subplot(211)
         
-        pltObj = ax.contourf(vPar/np.max(vPar), vPerp/np.max(vPerp), zEvolf[0], levels = 100)
+        # Normalize first, then clip to log-safe minimum BEFORE passing to contourf
+        index = 0
+        normVal = np.max(zEvolf[index])
+        f_norm = zEvolf[index] / normVal
+        vmin_log = 1e-4
+        f_norm = np.clip(f_norm, a_min=vmin_log, a_max=1)  # kill exact zeros
         
-        cbar = fig.colorbar(pltObj)
+        levels = np.logspace(np.log10(vmin_log), 0, 100)   # log-spaced levels
+
+        pltObj = ax.contourf(vPar/np.max(vPar), vPerp/np.max(vPerp), f_norm, 
+                             norm=colors.LogNorm(vmin=vmin_log, vmax=1),
+                             levels=levels,
+                             extend='neither')
+        
+        cbar = fig.colorbar(pltObj, ax=ax)
+        cbar.set_label(r'f/f$_{max}$')
+        cbar.set_ticks([1e-4, 1e-3, 1e-2, 1e-1, 1e0])
+        cbar.set_ticklabels([r'$10^{-4}$', r'$10^{-3}$', r'$10^{-2}$', r'$10^{-1}$', r'$10^{0}$'])
         
         ax.set_aspect('equal')
         ax.set_xlabel(r'$v_{||}/v_0$')
         ax.set_ylabel(r'$v_{\perp}/v_0$')
-        ax.set_title(f'z = {zValArr[0]}m', 
+        ax.set_title(f'z = {np.round(zValArr[index], 2)}m', 
                      pad=45)
         
+        #### Off-midplane plot
+
         ax = fig.add_subplot(212)
         
-        pltObj = ax.contourf(vPar/np.max(vPar), vPerp/np.max(vPerp), zEvolf[7], levels = 100)
+        # Normalize first, then clip to log-safe minimum BEFORE passing to contourf
+        index = -3
+        f_norm = zEvolf[index] / normVal
+        vmin_log = 1e-4
+        f_norm = np.clip(f_norm, a_min=vmin_log, a_max=1)  # kill exact zeros
         
-        cbar = fig.colorbar(pltObj)
+        levels = np.logspace(np.log10(vmin_log), 0, 100)   # log-spaced levels
+
+        pltObj = ax.contourf(vPar/np.max(vPar), vPerp/np.max(vPerp), f_norm, 
+                             norm=colors.LogNorm(vmin=vmin_log, vmax=1),
+                             levels=levels,
+                             extend='neither')
+        
+        cbar = fig.colorbar(pltObj, ax=ax)
+        cbar.set_label(r'f/f$_{max}$')
+        cbar.set_ticks([1e-4, 1e-3, 1e-2, 1e-1, 1e0])
+        cbar.set_ticklabels([r'$10^{-4}$', r'$10^{-3}$', r'$10^{-2}$', r'$10^{-1}$', r'$10^{0}$'])
         
         ax.set_aspect('equal')
         ax.set_xlabel(r'$v_{||}/v_0$')
         ax.set_ylabel(r'$v_{\perp}/v_0$')
-        ax.set_title(f'z = {np.round(zValArr[7], 2)}m', 
+        ax.set_title(f'z = {np.round(zValArr[index], 2)}m', 
                      pad=45)
         
         plt.show()
     
     return zEvolf, rValArr
 
-def compute_row_fz(i, nArr, RmArr, E_NBI, theta_NBI, TeArr, mu_i, ZeffArr, gridsize, rArr, zArr, Rmesh, Zmesh, Bmag, magneticFlux):
+def compute_row_fz(i, nFastArr, nMaxArr, TMaxArr, RmArr, E_NBI, theta_NBI, TeArr, mu_i, ZeffArr, gridsize, rArr, zArr, Rmesh, Zmesh, Bmag, magneticFlux):
     """
     Computes f along z for a given set of r and z values. This is purely a
     helper function that allows dist_func_rz to run things in
     parallel.
     """
+
     # Get the distribution function at the midplane
-    vPar, vPerp, midplaneF = dist_func(nArr[i], RmArr[i], E_NBI, theta_NBI, TeArr[i], mu_i, ZeffArr[i], gridsize=gridsize)
+    vPar, vPerp, midplaneF = dist_func(nFastArr[i], nMaxArr[i], TMaxArr[i], RmArr[i], E_NBI, theta_NBI, TeArr[i], mu_i, ZeffArr[i], gridsize=gridsize)
     
     # Evolve it along zVals
     f_z, rAlongTube = dist_func_z_evol(midplaneF, vPar, vPerp, rArr[i], zArr, Rmesh, Zmesh, Bmag, magneticFlux)
     
     return i, f_z, rAlongTube, vPar, vPerp
 
-def dist_func_rz(rArr, zArr, nArr, TeArr, ZeffArr, E_NBI, theta_NBI, mu_i, filenameEqdsk):
+def dist_func_rz(rArr, zArr, nFastArr, nMaxArr, TMaxArr, TeArr, ZeffArr, E_NBI, theta_NBI, mu_i, filenameEqdsk):
     """
     This function generates a distribution function at each (r,z) location in
     the plasma.
@@ -450,8 +569,12 @@ def dist_func_rz(rArr, zArr, nArr, TeArr, ZeffArr, E_NBI, theta_NBI, mu_i, filen
         function. [meters]
     zArr : np.array
         Axial positions where want the distribution functions. [meters]
-    nArr : np.array
-        Plasma density profile at the midplane. [m^-3]
+    nFastArr : np.array
+        Fast ion component plasma density profile at the midplane. [m^-3]
+    nMaxArr : np.array
+        Maxwellian background plasma density profile at the midplane. [m^-3]
+    TMaxArr : np.array
+        Maxwellian background plasma temperature profile at the midplane. [keV]
     TeArr : np.array
         T_e profile at the midplane. [keV]
     ZeffArr : np.array
@@ -547,8 +670,14 @@ def dist_func_rz(rArr, zArr, nArr, TeArr, ZeffArr, E_NBI, theta_NBI, mu_i, filen
     rArr2D = []
     
     # Setup so that compute_row can only be called with i. The rest of the arguments are pre-setup.
+
+    # Change the plotting backend to be non-interactive for the worker function since it will be called in parallel and we don't want multiple plot windows popping up.
+    plt.switch_backend('Agg')
+
     worker = partial(compute_row_fz, 
-                     nArr=nArr,
+                     nFastArr=nFastArr,
+                     nMaxArr=nMaxArr,
+                     TMaxArr=TMaxArr,
                      RmArr=RmArr, 
                      E_NBI=E_NBI, 
                      theta_NBI=theta_NBI, 
@@ -574,6 +703,9 @@ def dist_func_rz(rArr, zArr, nArr, TeArr, ZeffArr, E_NBI, theta_NBI, mu_i, filen
             vPar = vPar
             vPerp = vPerp
 
+    # Change the plotting backend back to interactive for the rest of the code.
+    plt.switch_backend('TkAgg')
+
     rArr2D = np.array(rArr2D)
 
     # for i in range(len(rArr)):
@@ -596,6 +728,52 @@ def dist_func_rz(rArr, zArr, nArr, TeArr, ZeffArr, E_NBI, theta_NBI, mu_i, filen
     # Make the z-array also 2D to make the analysis easier
     zArr2D = np.tile(zArr, (len(rArr), 1))
     
+    return vPar, vPerp, zArr2D, rArr2D, f_rz
+
+def dist_func_rz_cql3d(filenameCQL3D):
+
+    vPar, vPerp, zArr2D, rArr2D, f_rz = [], [], [], [], []
+
+    # Open the CQL3D output file
+    # with xr.open_dataset(filenameCQL3D) as ds:
+
+        
+
+    return vPar, vPerp, zArr2D, rArr2D, f_rz
+
+def dist_func_rz_pleiades(filenamePleiades, filenameEqdsk):
+
+    # =========================================================================
+    # Open the pleiades output file and extract the distribution function 
+    # parameters.
+    # =========================================================================
+
+    with h5py.File(filenamePleiades, 'r') as f:
+
+        print("Keys in the file:", list(f.keys()))
+
+        # Open the equilibrium object
+        equilObj = f['Equilibrium']
+        # Open the currents object
+        currentsObj = f['Currents']
+        # Open the diagnostics object
+        diagnosticsObj = f['Diagnostics']
+        # Open the mesh object
+        meshObj = f['Mesh']
+        # Open the vacuum fields object
+        vacuumFieldsObj = f['VacuumFields']
+        # Open the flux gridded pressure object
+        fluxGriddedPressureObj = f['FluxGriddedPressure']
+
+        print("Keys in Equilibrium object:", list(equilObj.keys()))
+        print("Keys in Currents object:", list(currentsObj.keys()))
+        print("Keys in Diagnostics object:", list(diagnosticsObj.keys()))
+        print("Keys in Mesh object:", list(meshObj.keys()))
+        print("Keys in VacuumFields object:", list(vacuumFieldsObj.keys()))
+        print("Keys in FluxGriddedPressure object:", list(fluxGriddedPressureObj.keys()))
+
+    vPar, vPerp, zArr2D, rArr2D, f_rz = [], [], [], [], []
+
     return vPar, vPerp, zArr2D, rArr2D, f_rz
 
 def fusion_cross_section(makeplot=False):
@@ -642,7 +820,7 @@ def fusion_cross_section(makeplot=False):
         E *= 1e6
         xs /= 1e28
         
-        #Remove all the directory information from the filename
+        # Remove all the directory information from the filename
         filenameCX = filenameCX.split('/')[-1]
         
         if COFM:
@@ -866,26 +1044,268 @@ def fusion_reactivity_rz(vPar, vPerp, zArr2D, rArr2D, f_rz, makeplot=False, save
     
     return zArr2D, rArr2D, reactivity2D
 
+# Load pleiades output
+if __name__ == '__tempmain__':
+    """
+    Load the distribution function from a pleaides output.
+    """
+
+    # Pleaides output file location
+    filenamePleiades = '/home/sanwalka/synthetic_proton_detector/data/pleiades_260105053.h5'
+
+    # eqdsk output file location
+    filenameEqdsk = '/home/sanwalka/synthetic_proton_detector/eqdsk/wham_hts_eqdsk_for_kunal'
+
+    vPar, vPerp, zArr2D, rArr2D, f_rz = dist_func_rz_pleiades(filenamePleiades, filenameEqdsk)
+
+# Plot f at midplane
+if __name__ == '__tempmain__':
+    """
+    Plot the distribution function at the midplane
+    """
+
+    #########################################################################################
+    #### HTPD 2026 Plot
+    # Save a plot of the distribution function at z=0 for a 0.1keV Te case
+    _, _, _ = dist_func(n_fast = 5e18,
+                        n_max = 5e19,
+                        T_max = 0.03,
+                        R_m = 57,
+                        E_NBI = 25,
+                        theta_NBI = np.pi/4,
+                        T_e = 0.075,
+                        mu_i = 2,
+                        Z_eff = 3,
+                        gridsize = 500,
+                        makeplot = True,
+                        savename = 'dist_func_with_maxwellian.png')
+    #########################################################################################
+
+    # Location of the CQL3D output file
+    # filenameCQL3D = '/home/sanwalka/synthetic_proton_detector/WHAM_R_2gen_6e18_50eV_w_add_source.nc'
+
+    # vPar, vPerp, zArr2D, rArr2D, f_rz = dist_func_rz_cql3d(filenameCQL3D)
+
+# Plot f at z-positions
 if __name__ == '__main__':
+    """
+    Plot the distribution function at 2 z-positions
+    """
+
+    #########################################################################################
+    #### HTPD 2026 Plot
+    vPar, vPerp, f = dist_func(n_fast = 5e18,
+                               n_max = 5e19,
+                               T_max = 1,
+                               R_m = 57,
+                               E_NBI = 25,
+                               theta_NBI = np.pi/4,
+                               T_e = 0.075,
+                               mu_i = 2,
+                               Z_eff = 3,
+                               gridsize = 500)
+
+    print('Maximum values of the midlane distribution function-')
+    print(vPar.max(), vPerp.max(), f.max())
+    print('****************************************************')
+
+    print('Minimum values of the midlane distribution function-')
+    print(vPar.min(), vPerp.min(), f.min())
+    print('****************************************************')
+    
+    # Location of magnetic equilibrium file
+    filenameEqdsk = '/home/sanwalka/synthetic_proton_detector/eqdsk/wham_hts_eqdsk_for_kunal'
+
+    # Load the magnetic equilibrium
+    Rmesh, Zmesh, Br, Bz, Bmag, magneticFlux = magnetic_equilibrium(filenameEqdsk)
+
+    # Radial distance where the distribution function is calculated from the midplane
+    rDist = 0.01 # [m]
+
+    # z-positions where we want the evolved distribution function
+    zValArr = np.linspace(0, 0.8, 20)
+
+    # Calculate the z-evolved distribution function
+    _, _ = dist_func_z_evol(f, vPar, vPerp, rDist, zValArr, Rmesh, Zmesh, Bmag, magneticFlux, makeplot=True)
+
+# Calculate reactivity along z for 1 flux tube
+if __name__ == '__tempmain__':
+    """
+    Test to see if the fusion reactivity calculator is working properly
+    """
+
+    # =============================================
+    # Test with a maxwellian
+    # =============================================
+
+    # Generate a maxwellian with 10keV
+    vPar, vPerp, f = dist_func(n_fast = 5,
+                               n_max = 5e19,
+                               T_max = 10,
+                               R_m = 57,
+                               E_NBI = 25,
+                               theta_NBI = np.pi/4,
+                               T_e = 0.075,
+                               mu_i = 2,
+                               Z_eff = 3,
+                               gridsize = 50,
+                               makeplot = True)
+    
+    vPar_1d = vPar[0, :]
+    vPerp_1d = vPerp[:, 0]
+
+    fusion_cross_section()
+    reactivity = fusion_reactivity(f, vPar_1d, vPerp_1d)
+
+    print(reactivity)
+    
+# Calculate the reactivity along z for a given flux tube
+if __name__ == '__tempmain__':
+
+    # =============================================
+    # Test with a z-evolved maxwellian
+    # =============================================
+
+    # Generate a maxwellian at the midplane with 10keV
+    vPar, vPerp, f = dist_func(n_fast = 5,
+                               n_max = 5e19,
+                               T_max = 10,
+                               R_m = 57,
+                               E_NBI = 25,
+                               theta_NBI = np.pi/4,
+                               T_e = 0.075,
+                               mu_i = 2,
+                               Z_eff = 3,
+                               gridsize = 50)
+
+    vPar_1d = vPar[0, :]
+    vPerp_1d = vPerp[:, 0]
+
+    # Location of magnetic equilibrium file
+    filenameEqdsk = '/home/sanwalka/synthetic_proton_detector/eqdsk/wham_hts_eqdsk_for_kunal'
+    # Load the magnetic equilibrium
+    Rmesh, Zmesh, Br, Bz, Bmag, magneticFlux = magnetic_equilibrium(filenameEqdsk)
+
+    # z-positions where we want to calculate the reactivity
+    zArr = np.linspace(0, 0.8, 50)
+
+    # Evolve f along z
+    zEvolF, rValArr = dist_func_z_evol(f, vPar, vPerp, 0, zArr, Rmesh, Zmesh, Bmag, magneticFlux)
+
+    reactivity1D = np.zeros(shape=len(zArr))
+
+    # Calculate the reactivity at each z position
+    fusion_cross_section()
+    for i in range(len(zArr)):
+
+        reactivity1D[i] = fusion_reactivity(zEvolF[i], vPar_1d, vPerp_1d)
+
+    # Plot the data
+    fig = plt.figure(figsize=(12, 8), tight_layout=True)
+    ax = fig.add_subplot(111)
+
+    ax.plot(zArr, reactivity1D)
+    # Smooth it a little
+    smoothedReactivity1D = sc.signal.savgol_filter(reactivity1D, window_length=5, polyorder=3)
+    ax.plot(zArr, smoothedReactivity1D)
+
+    ax.set_title(r'10keV Maxwellian (n$_e$ = 5$\cdot$10$^{19}$m$^{-3}$)')
+    ax.set_xlabel('Z [m]')
+    ax.set_ylabel(r'Reactivity [#/(m$^3$s)]')
+
+    plt.show()
+
+    # =============================================
+    # Test with a fast ion + maxwellian
+    # =============================================
+    
+    # Generate 10% fast ion plasma with a 1keV maxwellian
+    vPar, vPerp, f = dist_func(n_fast = 5e18,
+                               n_max = 5e19,
+                               T_max = 1,
+                               R_m = 57,
+                               E_NBI = 25,
+                               theta_NBI = np.pi/4,
+                               T_e = 0.075,
+                               mu_i = 2,
+                               Z_eff = 3,
+                               gridsize = 50)
+
+    vPar_1d = vPar[0, :]
+    vPerp_1d = vPerp[:, 0]
+
+    # Evolve f along z
+    zEvolF, rValArr = dist_func_z_evol(f, vPar, vPerp, 0, zArr, Rmesh, Zmesh, Bmag, magneticFlux)
+
+    reactivity1D = np.zeros(shape=len(zArr))
+
+    # Calculate the reactivity at each z position
+    for i in range(len(zArr)):
+
+        reactivity1D[i] = fusion_reactivity(zEvolF[i], vPar_1d, vPerp_1d)
+
+    # Plot the data
+    fig = plt.figure(figsize=(12, 8), tight_layout=True)
+    ax = fig.add_subplot(111)
+
+    ax.plot(zArr, reactivity1D)
+    # Smooth it a little
+    smoothedReactivity1D = sc.signal.savgol_filter(reactivity1D, window_length=5, polyorder=3)
+    ax.plot(zArr, smoothedReactivity1D)
+
+    ax.set_title(r'1keV Maxwellian (n$_e$ = 5$\cdot$10$^{19}$m$^{-3}$) with 10% fast ions')
+    ax.set_xlabel('Z [m]')
+    ax.set_ylabel(r'Reactivity [#/(m$^3$s)]')
+
+    plt.show()
+    
+# Calculate 2D reactivity profile
+if __name__ == '__tempmain__':
+    """
+    Calculate the 2D fusion reactivity profile
+    """
     
     # Location of magnetic equilibrium file
     filenameEqdsk = '/home/sanwalka/synthetic_proton_detector/eqdsk/wham_hts_eqdsk_for_kunal'
     
     # Location to store the 2D fusion reactivity profile
-    savenameReactivity = '/home/sanwalka/synthetic_proton_detector/reactivity/predicted_reactivity_2d.npz'
+    savenameReactivity = '/home/sanwalka/synthetic_proton_detector/reactivity/predicted_reactivity_2d_faster_interpolator.npz'
     
     # Get the r-z evolved distribution functions
-    rArr = np.linspace(0, 0.1, 10)
-    zArr = np.linspace(0, 0.8, 20)
-    nArr = np.full(np.shape(rArr), 1e19)
-    TeArr = np.full(np.shape(rArr), 0.1)
+    rArr = np.linspace(0, 0.1, 5)
+    zArr = np.linspace(0, 0.8, 50)
+
+    # Use density and temperature profiles from Keisuke's paper.
+    nArr = 5e19 - 3e20*rArr
+    TeArr = 75 - (80*rArr)**2
+
+    # Fast ion component is 1/10 the maxwellian background
+    nFastArr = nArr/10
+    nMaxArr = nArr - nFastArr
+
+    # Assume the maxwellian background has a temperature of 30eV
+    TMaxArr = np.full(np.shape(rArr), 0.03)
+
+    # Zeff is flat at 2 for simplicity
     ZeffArr = np.full(np.shape(rArr), 2)
+
+    # NBI parameters are the same for all flux surfaces
     E_NBI = 25
     theta_NBI = np.pi/4
     mu_i = 2
     
     startTime = time.time()
-    vPar, vPerp, zArr2D, rArr2D, f_rz = dist_func_rz(rArr, zArr, nArr, TeArr, ZeffArr, E_NBI, theta_NBI, mu_i, filenameEqdsk)
+    vPar, vPerp, zArr2D, rArr2D, f_rz = dist_func_rz(rArr, 
+                                                     zArr, 
+                                                     nFastArr, 
+                                                     nMaxArr,
+                                                     TMaxArr,
+                                                     TeArr, 
+                                                     ZeffArr, 
+                                                     E_NBI, 
+                                                     theta_NBI, 
+                                                     mu_i, 
+                                                     filenameEqdsk)
     distFuncTime = time.time()
     print(f'Time taken to generate f_rz = {np.round(distFuncTime - startTime, 2)}s')
     
