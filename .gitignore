@@ -1,0 +1,15 @@
+# Ignore data files
+data/
+*.npz
+*.h5
+*.nc
+
+# Ignore plots
+plots/
+*.png
+*.jpg
+*.pdf
+*.mp4
+
+# Ignore eqdsk files
+eqdsk/
