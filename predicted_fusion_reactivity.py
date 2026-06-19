@@ -901,94 +901,94 @@ def extend_f(f, v, xsi, makeplot=False):
 
     return f_full, v, xi_full_1d
 
-def fusion_reactivity(f, v, xsi):
+def _trapz_weights(x):
+
+    dx = x[1] - x[0]
+    
+    w = np.full(len(x), dx)
+    
+    w[0] *= 0.5
+    w[-1] *= 0.5
+    
+    return w
+
+def build_fusion_kernel(v, xsi, chunk_size=4):
     """
-    Calculate fusion reactivity for arbitrary 2D distribution function.
-    
-    Parameters:
-    -----------
-    f : np.array
-        Density normalized distribution function.
-        1st index - pitch angle (xsi)
-        2nd index - velocity (v)
-    v : 1D numpy array  
-        Velocity grid in m/s
-    xsi : 1D numpy array
-        Normalized pitch angle.
-        Domain must be from [0, 1]
-    
-    Returns:
-    --------
-    reactivity : float
-        Fusion reactivity Gamma in 1/(m^3*s)
+    One-time precomputation. v, xsi must be the exact grids you will use
+    for every subsequent call to fusion_reactivity_fast.
+
+    Returns K (N x N), plus the extended grids for bookkeeping.
     """
 
-    # Extend f along xsi from [0, 1] to [-1, 1]
-    f, v, xsi = extend_f(f, v, xsi)
+    # extend_f mirrors the grid geometry, not the values of f, so a
+    # dummy f is fine here just to recover the extended grids.
+    dummy_f = np.zeros((len(xsi), len(v)))
+    _, v_ext, xsi_ext = extend_f(dummy_f, v, xsi)
 
-    # Reduced mass for identical particles [kg]
+    n_xi, n_v = len(xsi_ext), len(v_ext)
+    N = n_xi * n_v
     m_reduced = sc.constants.m_p / 2.0
 
-    # 4D arrays for integration
-    xi1_4d = xsi[:, np.newaxis, np.newaxis, np.newaxis]
-    v1_4d  = v[np.newaxis, :, np.newaxis, np.newaxis]
-    xi2_4d = xsi[np.newaxis, np.newaxis, :, np.newaxis]
-    v2_4d  = v[np.newaxis, np.newaxis, np.newaxis, :]
+    w_xi = _trapz_weights(xsi_ext)
+    w_v  = _trapz_weights(v_ext) * 2 * np.pi * v_ext**2   # quadrature weight * jacobian, fused
 
-    # Corresponding 4D distribution functions
-    f1_4d = f[:, :, np.newaxis, np.newaxis]
-    f2_4d = f[np.newaxis, np.newaxis, :, :]
+    xi2 = xsi_ext[np.newaxis, np.newaxis, :, np.newaxis]
+    v2  = v_ext[np.newaxis, np.newaxis, np.newaxis, :]
+    vpar2 = v2 * xi2
+    vperp2_sq = v2**2 * (1 - xi2**2)
+    w2 = (w_xi[np.newaxis, np.newaxis, :, np.newaxis] *
+          w_v[np.newaxis, np.newaxis, np.newaxis, :])
 
-    # Calculate vPerp and vPar to get the relative velocities
-    vpar1 = v1_4d * xi1_4d
-    vpar2 = v2_4d * xi2_4d
-    vperp1 = v1_4d * np.sqrt(1 - xi1_4d**2)
-    vperp2 = v2_4d * np.sqrt(1 - xi2_4d**2)
+    K = np.empty((N, N))
 
-    # Relative parallel velocity
-    v_rel_par = vpar1 - vpar2  # broadcasts to (n_perp, n_par, n_perp, n_par)
-    
-    # Relative perpendicular velocity (averaged over azimuthal angle)
-    v_rel_perp_sq_avg = vperp1**2 + vperp2**2
-    
-    # Relative speed
-    v_rel = np.sqrt(v_rel_par**2 + v_rel_perp_sq_avg)
+    for start in range(0, n_xi, chunk_size):
+        stop = min(start + chunk_size, n_xi)
+        c = stop - start
 
-    # Center-of-mass energy in eV
-    E_cm = 0.5 * m_reduced * v_rel**2 / (sc.constants.e)
+        xi1 = xsi_ext[start:stop, np.newaxis, np.newaxis, np.newaxis]
+        v1  = v_ext[np.newaxis, :, np.newaxis, np.newaxis]
+        vpar1 = v1 * xi1
+        vperp1_sq = v1**2 * (1 - xi1**2)
 
-    # Cross-section in m^2
-    # Flatten for interpolation, then reshape back
-    E_cm_flat = E_cm.flatten()
-    sigma_flat = ddptFusionCXFunc(E_cm_flat)
-    sigma = sigma_flat.reshape(E_cm.shape)
+        v_rel = np.sqrt((vpar1 - vpar2)**2 + vperp1_sq + vperp2_sq)
+        E_cm = 0.5 * m_reduced * v_rel**2 / sc.constants.e
+        sigma = ddptFusionCXFunc(E_cm.ravel()).reshape(E_cm.shape)
 
-    # Spherical coordinate jacobians
-    jac1 = 2 * np.pi * v1_4d**2 
-    jac2 = 2 * np.pi * v2_4d**2 
+        w1 = (w_xi[start:stop, np.newaxis, np.newaxis, np.newaxis] *
+              w_v[np.newaxis, :, np.newaxis, np.newaxis])
 
-    # Integrand
-    integrand = f1_4d * f2_4d * jac1 * jac2 * v_rel * sigma
+        chunk = (w1 * w2 * v_rel * sigma).reshape(c * n_v, N)
+        K[start * n_v: stop * n_v, :] = chunk
 
-    dv  = v[1] - v[0]
-    dxi = xsi[1] - xsi[0]
+    return K, v_ext, xsi_ext
 
-    result = np.trapezoid(integrand, dx=dv, axis=3)    # integrate over v2
-    result = np.trapezoid(result, dx=dxi, axis=2)      # integrate over xsi2
-    result = np.trapezoid(result, dx=dv, axis=1)       # integrate over v1
-    reactivity = np.trapezoid(result, dx=dxi, axis=0)  # integrate over xsi1
+def fusion_reactivity(f, v, xsi, K, symv):
+    """
+    Because the kernel has already been pre-computed, this function now just performs the final math step of calculating the reactivity.
+    """
 
-    return reactivity
+    f_ext, _, _ = extend_f(f, v, xsi)
+    f_flat = np.ascontiguousarray(f_ext.ravel(), dtype=K.dtype)
 
-def compute_row_reactivity(i, f_rz, vel_1d, xsi_1d):
+    # K.T is mathematically identical to K (symmetric), but it's a
+    # Fortran-contiguous *view* of a C-contiguous array, so this avoids
+    # the copy that BLAS would otherwise make internally.
+    Kf = symv(alpha=1.0, a=K.T, x=f_flat)
+
+    return float(f_flat @ Kf)
+
+def compute_row_reactivity(i):
     """
     Calculates the fusion reactivities for each value in the row. This is 
     purely a helper function that allows fusion_reactivity_rz to run
     things in parallel.
     """
-    row = np.zeros(f_rz.shape[1])
-    for j in range(f_rz.shape[1]):
-        row[j] = fusion_reactivity(f_rz[i, j], vel_1d, xsi_1d)
+
+    row = np.zeros(_f_rz.shape[1])
+
+    for j in range(_f_rz.shape[1]):
+        row[j] = fusion_reactivity(f_rz[i, j], _vel_1d, _xsi_1d, _K, _symv)
+    
     return i, row
 
 def fusion_reactivity_rz(vel, xsi, zArr2D, rArr2D, f_rz, makeplot=False, savename=''):
@@ -1035,21 +1035,32 @@ def fusion_reactivity_rz(vel, xsi, zArr2D, rArr2D, f_rz, makeplot=False, savenam
     vel_1d = vel[0, :]
     xsi_1d = xsi[:, 0]
 
+    # Empty array to store the 2D reactivity profile
     reactivity2D = np.zeros_like(zArr2D)
+
+    # Global variables that help remove redundant computation in the parallelization workflow
+    _K = None
+    _vel_1d = None
+    _xsi_1d = None
+    _f_rz = None
+    _symv = None
+
+    def _init_worker(K, vel_1d, xsi_1d, f_rz):
+        global _K, _vel_1d, _xsi_1d, _f_rz, _symv
+        _K = K
+        _vel_1d = vel_1d
+        _xsi_1d = xsi_1d
+        _f_rz = f_rz
+        _symv = sc.linalg.blas.get_blas_funcs('symv', (K,))
     
-    # Setup so that compute_row can only be called with i. The rest of the arguments are pre-setup.
-    worker = partial(compute_row_reactivity, f_rz=f_rz, vel_1d=vel_1d, xsi_1d=xsi_1d)
+    # Build the kernel ONCE, before any workers exist.
+    K, vel_1d_ext, xsi_1d_ext = build_fusion_kernel(vel_1d, xsi_1d)
 
     # Use half the lana cores to parallelize the workflow
-    with Pool(int(cpu_count()/2)) as pool:
-            
-        results = pool.map(worker, range(zArr2D.shape[0]))
+    with Pool(int(cpu_count()/2), initializer=_init_worker, initargs=(K, vel_1d, xsi_1d, f_rz)) as pool:
+        results = pool.map(compute_row_reactivity, range(zArr2D.shape[0]))
 
         for i, row in results:
-
-            # Smooth the reactivity along z as it is spiky from interpolation errors
-            # row = sc.signal.savgol_filter(row, window_length=5, polyorder=2)
-
             reactivity2D[i] = row
 
     if makeplot == True:
@@ -1283,7 +1294,7 @@ if __name__ == '__tempmain__':
     plt.show()
     
 # Calculate 2D reactivity profile
-if __name__ == '__tempmain__':
+if __name__ == '__main__':
     """
     Calculate the 2D fusion reactivity profile
     """
