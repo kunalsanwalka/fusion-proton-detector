@@ -329,7 +329,68 @@ def magnetic_equilibrium(filenameEqdsk, makeplot=False):
     
     return Rmesh, Zmesh, Br, Bz, Bmag, magneticFlux
 
-def dist_func_z_evol(f, vel, xsi, rDist, zValArr, Rmesh, Zmesh, Bmag, magneticFlux, makeplot=False):
+def _trace_flux_tube(rDist, zValArr, Rmesh, Zmesh, Bmag, magneticFlux, BmagInterpolator):
+    """
+    Precompute the r-values and normalized magnetic field values along each flux surface.
+    """
+
+    # Get the magnetic flux for the distribution function at the midplane
+    idx = np.abs(Rmesh[0] - rDist).argmin()
+    midplaneFlux = magneticFlux[int(len(Zmesh)/2), idx]
+
+    contours = skimage.measure.find_contours(magneticFlux, level=midplaneFlux)
+    
+    # find_contours returns fractional indices — interpolate into the real
+    # coordinate arrays rather than rounding to the nearest grid point
+    contour = contours[0]
+    z_axis = Zmesh[:, 0]
+    r_axis = Rmesh[0]
+
+    z_idx_interp = sc.interpolate.interp1d(np.arange(len(z_axis)), z_axis)
+    r_idx_interp = sc.interpolate.interp1d(np.arange(len(r_axis)), r_axis)
+    z_vals = z_idx_interp(contour[:, 0])
+    r_vals = r_idx_interp(contour[:, 1])
+
+    contour_interp = sc.interpolate.interp1d(z_vals, r_vals, bounds_error=False, fill_value=np.nan)
+    rValArr = contour_interp(zValArr)
+
+    points = np.array([zValArr, rValArr]).T
+    bMagArr = BmagInterpolator(points)
+    bNorm = BmagInterpolator([0, rDist])[0]
+
+    # B/B_0
+    bNormArr = bMagArr / bNorm
+
+    # Mirror ratio
+    zThroat = np.max(Zmesh) * 0.95
+    rAtThroat = contour_interp(zThroat)
+    bMagInThroat = BmagInterpolator([zThroat, rAtThroat])[0]
+    Rm = bMagInThroat / bNorm
+
+    return rValArr, bNormArr, Rm
+
+def build_flux_tube_geometry(rArr, zValArr, Rmesh, Zmesh, Bmag, magneticFlux):
+    """
+    One-time precomputation: traces the flux tube and B(z)/B0 profile for
+    every starting radius in rArr. None of this depends on the particle
+    distribution, so it's computed once before the parallel sweep starts.
+    """
+
+    BmagInterpolator = sc.interpolate.RegularGridInterpolator((Zmesh[:, 0], Rmesh[0]), Bmag)
+
+    n_r, n_z = len(rArr), len(zValArr)
+    rAlongTube_all = np.empty((n_r, n_z))
+    bNormArr_all   = np.empty((n_r, n_z))
+    RmArr          = np.empty(n_r)
+
+    for i, rDist in enumerate(rArr):
+
+        # Radial position along each flux tube
+        rAlongTube_all[i], bNormArr_all[i], RmArr[i] = _trace_flux_tube(rDist, zValArr, Rmesh, Zmesh, Bmag, magneticFlux, BmagInterpolator)
+
+    return rAlongTube_all, bNormArr_all, RmArr
+
+def dist_func_z_evol(f, vel, xsi, bNormArr, makeplot=False):
     """
     This function evolves the distribution along z for a given magnetic
     equilibrium. It does this via the mu (1st adiabatic invariant) 
@@ -347,20 +408,8 @@ def dist_func_z_evol(f, vel, xsi, rDist, zValArr, Rmesh, Zmesh, Bmag, magneticFl
         Normalized pitch angle array.
         To get the 1D array, use X[:,0].
         Units - normalized. 0 = v_perp ; 1 = v_par
-    rDist : float
-        Radial distance where this distribution function is calculated from the
-        midplane. [m]
-    zValArr : np.array
-        1D array that contains the z-positions where we want the evolved
-        distribution function.
-    Rmesh : np.array
-        2D array of radial positions
-    Zmesh : np.array
-        2D array of axial positions
-    Bmag : np.array
-        |B| values. [Tesla]
-    magneticFlux : np.array
-        Magnetic flux. [Weber]
+    bNormArr: np.array
+        Normalized magnetic field strength along the flux tube.
     makeplot : boolean, optional
         Make a plot of the distribution function at 2 z-positions to make sure
         the function is working properly. The default is False.
@@ -372,57 +421,12 @@ def dist_func_z_evol(f, vel, xsi, rDist, zValArr, Rmesh, Zmesh, Bmag, magneticFl
     rValArr : np.array
         r-values that map along the flux tube specified by rDist.
     """
-    
-    # ==================================================================
-    # Magnetic field strength along the flux tube
-    # ==================================================================
 
-    # Get the magnetic flux for the distribution function at the midplane
-    idx = np.abs(Rmesh[0] - rDist).argmin()
-    midplaneFlux = magneticFlux[int(len(Zmesh)/2), idx]
-
-    contours = skimage.measure.find_contours(magneticFlux, level=midplaneFlux)
-
-    if len(contours) > 0:
-
-        contour = contours[0]  # shape: (N, 2), columns are [row_idx, col_idx]
-
-        # find_contours returns fractional indices — interpolate into the real
-        # coordinate arrays rather than rounding to the nearest grid point
-        z_axis = Zmesh[:, 0]  # 1D array of Z values
-        r_axis = Rmesh[0]     # 1D array of R values
-
-        z_idx_interp = sc.interpolate.interp1d(np.arange(len(z_axis)), z_axis)
-        r_idx_interp = sc.interpolate.interp1d(np.arange(len(r_axis)), r_axis)
-
-        z_vals = z_idx_interp(contour[:, 0])
-        r_vals = r_idx_interp(contour[:, 1])
-
-        contour_interp = sc.interpolate.interp1d(z_vals, r_vals,
-                                                bounds_error=False, fill_value=np.nan)
-        rValArr = contour_interp(zValArr)
-        
-    # Make an interpolation function for |B|
-    BmagInterpolator = sc.interpolate.RegularGridInterpolator((Zmesh[:,0], Rmesh[0]), Bmag)
-    
-    # Get the magnetic field strength data for each (z, r) pair
-    points = np.array([zValArr, rValArr]).T
-    bMagArr = BmagInterpolator(points)
-    
-    # Magnetic field strength at z=0
-    bNorm = BmagInterpolator([0, rDist])[0]
-    
-    # B/B_0
-    bNormArr = bMagArr/bNorm
-
-    # =======================================================================
-    # Evolve the distribution function along z due to mu and E conservation
-    # =======================================================================
-
-    zEvolf = np.zeros(shape=(len(zValArr), *f.shape))
+    # 3D array to store the z-evolved distribution function
+    zEvolf = np.zeros(shape=(len(bNormArr), *f.shape))
     xsi_1d = xsi[:, 0]
     
-    for i in range(len(zValArr)):
+    for i in range(len(bNormArr)):
     
         b = bNormArr[i]
 
@@ -523,9 +527,9 @@ def dist_func_z_evol(f, vel, xsi, rDist, zValArr, Rmesh, Zmesh, Bmag, magneticFl
         
         plt.show()
     
-    return zEvolf, rValArr
+    return zEvolf
 
-def compute_row_fz(i, nFastArr, nMaxArr, TMaxArr, RmArr, E_NBI, theta_NBI, TeArr, mu_i, ZeffArr, gridsize, rArr, zArr, Rmesh, Zmesh, Bmag, magneticFlux):
+def compute_row_fz(i):
     """
     Computes f along z for a given set of r and z values. This is purely a
     helper function that allows dist_func_rz to run things in
@@ -533,12 +537,12 @@ def compute_row_fz(i, nFastArr, nMaxArr, TMaxArr, RmArr, E_NBI, theta_NBI, TeArr
     """
 
     # Get the distribution function at the midplane
-    vel, xsi, midplaneF = dist_func(nFastArr[i], nMaxArr[i], TMaxArr[i], RmArr[i], E_NBI, theta_NBI, TeArr[i], mu_i, ZeffArr[i], gridsize=gridsize)
+    vel, xsi, midplaneF = dist_func(_nFastArr[i], _nMaxArr[i], _TMaxArr[i], _RmArr[i], _E_NBI, _theta_NBI, _TeArr[i], _mu_i, _ZeffArr[i], gridsize=_gridsize)
     
     # Evolve it along zVals
-    f_z, rAlongTube = dist_func_z_evol(midplaneF, vel, xsi, rArr[i], zArr, Rmesh, Zmesh, Bmag, magneticFlux)
+    f_z = dist_func_z_evol(midplaneF, vel, xsi, _bNormArr_all[i])
     
-    return i, f_z, rAlongTube, vel, xsi
+    return i, f_z, _rAlongTube_all[i], vel, xsi
 
 def dist_func_rz(rArr, zArr, nFastArr, nMaxArr, TMaxArr, TeArr, ZeffArr, E_NBI, theta_NBI, mu_i, filenameEqdsk):
     """
@@ -607,6 +611,37 @@ def dist_func_rz(rArr, zArr, nFastArr, nMaxArr, TMaxArr, TeArr, ZeffArr, E_NBI, 
         4th index - xsi
     """
     
+    # Global variables that help remove redundant computation in the parallelization workflow
+    _bNormArr_all = None
+    _rAlongTube_all = None
+    _nFastArr = None
+    _nMaxArr = None
+    _TMaxArr = None
+    _RmArr = None
+    _E_NBI = None
+    _theta_NBI = None
+    _TeArr = None
+    _mu_i = None
+    _ZeffArr = None
+    _gridsize = None
+
+    def _init_worker_fz(bNormArr_all, rAlongTube_all, nFastArr, nMaxArr, TMaxArr, RmArr, E_NBI, theta_NBI, TeArr, mu_i, ZeffArr, gridsize):
+
+        global _bNormArr_all, _rAlongTube_all, _nFastArr, _nMaxArr, _TMaxArr, _RmArr, _E_NBI, _theta_NBI, _TeArr, _mu_i, _ZeffArr, _gridsize
+
+        _bNormArr_all = bNormArr_all 
+        _rAlongTube_all = rAlongTube_all
+        _nFastArr = nFastArr
+        _nMaxArr = nMaxArr
+        _TMaxArr = TMaxArr 
+        _RmArr = RmArr
+        _E_NBI = E_NBI 
+        _theta_NBI = theta_NBI 
+        _TeArr = TeArr
+        _mu_i = mu_i 
+        _ZeffArr = ZeffArr 
+        _gridsize = gridsize
+
     # =========================================================================
     # Calculate the mirror ratios for each flux surface as defined by rArr for
     # the input magnetic equilibrium.
@@ -616,43 +651,7 @@ def dist_func_rz(rArr, zArr, nFastArr, nMaxArr, TMaxArr, TeArr, ZeffArr, E_NBI, 
     Rmesh, Zmesh, Br, Bz, Bmag, magneticFlux = magnetic_equilibrium(filenameEqdsk,
                                                                     makeplot=False)
     
-    # Make an interpolation function for |B| and Phi
-    fluxInterpolator = sc.interpolate.RegularGridInterpolator((Zmesh[:,0], Rmesh[0]), magneticFlux)
-    BmagInterpolator = sc.interpolate.RegularGridInterpolator((Zmesh[:,0], Rmesh[0]), Bmag)
-    
-    # Flux and |B| values that correspond to the rArr values
-    midplaneFluxArr = np.zeros_like(rArr)
-    midplaneBmagArr = np.zeros_like(rArr)
-    for i in range(len(rArr)):
-        midplaneFluxArr[i] = fluxInterpolator([0, rArr[i]])[0]
-        midplaneBmagArr[i] = BmagInterpolator([0, rArr[i]])[0]
-        
-    # r-location at the mirror throat for the given flux surfaces
-    rArrAtThroat = np.zeros_like(rArr)
-    for i in range(len(rArr)):
-        
-        contour = plt.contour(Rmesh, Zmesh, magneticFlux, levels=[midplaneFluxArr[i]])
-        plt.close()
-        
-        # Extract the contour path
-        paths = contour.get_paths()
-        if len(paths) > 0:
-            vertices = paths[0].vertices  # [r, z] pairs along the contour
-            
-            # Interpolate to get r for each z in zValArr
-            contour_interp = sc.interpolate.interp1d(vertices[:, 1], vertices[:, 0], 
-                                                     bounds_error=False, fill_value=np.nan)
-            # use 0.95x the maximum mesh value as sometimes the data can be
-            # wonky at the end of the grids
-            rArrAtThroat[i] = contour_interp(np.max(Zmesh)*0.95)
-            
-    # Calculate the mirror ratio for each flux surface
-    RmArr = np.zeros_like(rArr)
-    for i in range(len(rArr)):
-        # use 0.95x the maximum mesh value as sometimes the data can be
-        # wonky at the end of the grids
-        bMagInThroat = BmagInterpolator([np.max(Zmesh)*0.95, rArrAtThroat[i]])[0]
-        RmArr[i] = bMagInThroat/midplaneBmagArr[i]
+    rAlongTube_all, bNormArr_all, RmArr = build_flux_tube_geometry(rArr, zArr, Rmesh, Zmesh, Bmag, magneticFlux)
        
     # =========================================================================
     # Generate the midplane distribution functions and then evolve them along
@@ -673,27 +672,9 @@ def dist_func_rz(rArr, zArr, nFastArr, nMaxArr, TMaxArr, TeArr, ZeffArr, E_NBI, 
     # Change the plotting backend to be non-interactive for the worker function since it will be called in parallel and we don't want multiple plot windows popping up.
     plt.switch_backend('Agg')
 
-    worker = partial(compute_row_fz, 
-                     nFastArr=nFastArr,
-                     nMaxArr=nMaxArr,
-                     TMaxArr=TMaxArr,
-                     RmArr=RmArr, 
-                     E_NBI=E_NBI, 
-                     theta_NBI=theta_NBI, 
-                     TeArr=TeArr, 
-                     mu_i=mu_i, 
-                     ZeffArr=ZeffArr, 
-                     gridsize=gridsize,
-                     rArr=rArr,
-                     zArr=zArr, 
-                     Rmesh=Rmesh, 
-                     Zmesh=Zmesh, 
-                     Bmag=Bmag, 
-                     magneticFlux=magneticFlux)
-
     # Use half of the cores on lana
-    with Pool(int(cpu_count()/2)) as pool:
-        results = pool.map(worker, range(len(rArr)))
+    with Pool(int(cpu_count()/2), initializer=_init_worker_fz, initargs=(bNormArr_all, rAlongTube_all, nFastArr, nMaxArr, TMaxArr, RmArr, E_NBI, theta_NBI, TeArr, mu_i, ZeffArr, gridsize)) as pool:
+        results = pool.map(compute_row_fz, range(len(rArr)))
 
         # Unpack results
         for i, f_z, rAlongTube, vel, xsi in results:
@@ -816,8 +797,16 @@ def fusion_cross_section(makeplot=False):
     
     # D + D -> T + p
     DDa_xs = read_xsec(crossSectionsDir + 'D_D_-_T_p.txt')
-    
-    ddptFusionCXFunc = sc.interpolate.CubicSpline(energyGrid, DDa_xs)
+
+    # ddptFusionCXFunc = sc.interpolate.CubicSpline(energyGrid, DDa_xs)
+
+    # Build once, same place ddptFusionCXFunc is currently built.
+    log_E = np.log(energyGrid)
+    log_sigma = np.log(np.maximum(DDa_xs, 1e-300))  # floor avoids log(0) at threshold
+
+    def ddptFusionCXFunc(E):
+        E_clamped = np.clip(E, energyGrid[0], energyGrid[-1])
+        return np.exp(np.interp(np.log(E_clamped), log_E, log_sigma))
     
     if makeplot == True:
         
@@ -915,7 +904,7 @@ def _trapz_weights(x):
 def build_fusion_kernel(v, xsi, chunk_size=4):
     """
     One-time precomputation. v, xsi must be the exact grids you will use
-    for every subsequent call to fusion_reactivity_fast.
+    for every subsequent call to fusion_reactivity.
 
     Returns K (N x N), plus the extended grids for bookkeeping.
     """
@@ -1347,7 +1336,7 @@ if __name__ == '__main__':
     
     # Get the r-z evolved fusion reactivity profile
     zArr2D, rArr2D, reactivity2D = fusion_reactivity_rz(vel, xsi, zArr2D, rArr2D, f_rz, 
-                                                        makeplot=True,
+                                                        makeplot=False,
                                                         savename=savenameReactivity)
     reactivityTime = time.time()
     print(f'Time taken to generate the reactivity = {np.round(reactivityTime - distFuncTime, 2)}s')
