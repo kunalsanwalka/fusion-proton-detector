@@ -228,17 +228,190 @@ def initialize_particle(energy,theta,phi=0,species='D'):
     
     return velArr
 
+def integrand(t,y,species='D'):
+    """
+    This function is the integrand used by the solve_ivp function called in
+    single_particle_track. This is done as scipy already has a built in initial
+    value problem integrator which is more accurate than anything I can write.
+
+    Parameters
+    ----------
+    t : float
+        Time (s).
+    y : np.array
+        State vector (positions and velocities).
+        Shape- y[0]=x
+               y[1]=y
+               y[2]=z
+               y[3]=vx
+               y[4]=vy
+               y[5]=vz
+    species : string, optional
+        Species code. 
+        The default is 'D'.
+
+    Returns
+    -------
+    dvdt : np.array
+        dy/dt (velocity and acceleration).
+        Shape- dvdt[0]=vx
+               dvdt[1]=vy
+               dvdt[2]=vz
+               dvdt[3]=ax
+               dvdt[4]=ay
+               dvdt[5]=az
+    """
+    
+    #Positions
+    xPos=y[0]
+    yPos=y[1]
+    zPos=y[2]
+    
+    #Velocities
+    vx=y[3]
+    vy=y[4]
+    vz=y[5]
+    
+    #Convert x,y to cylindrical
+    r=np.sqrt(xPos**2+yPos**2)
+    theta=np.arctan2(yPos,xPos)
+    
+    #Try-except block since the particle can go beyond the range of the
+    #generated eqdsk. If this were to happen to a real particle it would have
+    #hit the wall anyway so just set v and a to 0.
+    try:
+        #Get Br and Bz at those points
+        Br=BrInterpolator([zPos,r])[0]
+        Bz=BzInterpolator([zPos,r])[0]
+        
+    except ValueError:
+        Br=0
+        Bz=0
+        vx=0
+        vy=0
+        vz=0
+    
+    #Convert Br to Bx and By
+    Bx=Br*np.cos(theta)
+    By=Br*np.sin(theta)
+    
+    #Charge to mass ratio
+    qm=charge_to_mass_ratio(species)
+    
+    #Calculate acceleration
+    dvdt=[vx,               #vx
+          vy,               #vy
+          vz,               #vz
+          qm*(vy*Bz-vz*By), #ax
+          qm*(vz*Bx-vx*Bz), #ay
+          qm*(vx*By-vy*Bx)] #az
+    
+    return dvdt
+
+def integrand_relativistic(t, y, species='D', qm=1, gamma=1):
+    """
+    This function is the integrand used by the solve_ivp function called in
+    single_particle_track. This is done as scipy already has a built in initial
+    value problem integrator which is more accurate than anything I can write.
+
+    Parameters
+    ----------
+    t : float
+        Time (s).
+    y : np.array
+        State vector (positions and velocities).
+        Shape- y[0]=x
+               y[1]=y
+               y[2]=z
+               y[3]=vx
+               y[4]=vy
+               y[5]=vz
+    species : string, optional
+        Species code. 
+        The default is 'D'.
+    qm : float, optional
+        Charge to mass ratio (C/kg).
+        The default is 1.
+    gamma : float, optional
+        Lorentz factor.
+        The default is 1 (non-relativistic).
+
+    Returns
+    -------
+    dvdt : np.array
+        dy/dt (velocity and acceleration).
+        Shape- dvdt[0]=vx
+               dvdt[1]=vy
+               dvdt[2]=vz
+               dvdt[3]=ax
+               dvdt[4]=ay
+               dvdt[5]=az
+    """
+    
+    # Positions
+    xPos = y[0]
+    yPos = y[1]
+    zPos = y[2]
+    
+    # Velocities
+    vx = y[3]
+    vy = y[4]
+    vz = y[5]
+    
+    # Convert x,y to cylindrical
+    r = np.sqrt(xPos**2 + yPos**2)
+    
+    # Try-except block since the particle can go beyond the range of the
+    # generated eqdsk. If this were to happen to a real particle it would have
+    # hit the wall anyway so just set v and a to 0.
+    if r > 0.45 or np.abs(zPos) > 1:
+        return np.zeros(6)
+    else:
+        # Get Br and Bz at those points
+        Br = BrInterpolator(zPos, r)[0]
+        Bz = BzInterpolator(zPos, r)[0]
+    
+    # Convert Br to Bx and By
+    if r > 0:
+        Bx = Br * xPos/r
+        By = Br * yPos/r
+    else:
+        Bx = 0
+        By = 0
+    
+    # Calculate acceleration
+    dvdt = np.zeros(6)
+    dvdt[0] = vx
+    dvdt[1] = vy
+    dvdt[2] = vz
+    dvdt[3] = (qm/gamma) * (vy*Bz-vz*By) # ax
+    dvdt[4] = (qm/gamma) * (vz*Bx-vx*Bz) # ay
+    dvdt[5] = (qm/gamma) * (vx*By-vy*Bx) # az
+    
+    return dvdt
+
 def single_particle_track(xIni, energy, theta, phi=0, species='H',
                           timesteps=50, steplength=1e-9):
     """
     This function tracks the motion of the particle through the magnetic field
     as a function of the inital position and velocity.
-
-    Uses a relativistic Boris pusher — the standard fixed-step, symplectic
-    integrator for magnetic orbit tracking. It requires exactly 1 B-field
-    evaluation per step (vs ~6 for RK45), with no adaptive-stepping overhead.
-    Gamma is constant throughout since the Lorentz force does no work in a
-    pure magnetic field.
+    
+    This is done with the help of the solve_ivp function from scipy. It is used
+    to solve an initial value problem for ODE's. The exact syntax of it is
+    complicated but it seems to be a 1 line affair. solve_ivp solves
+    differential equations of the form-
+    dy/dt=f(y,t)
+    
+    Orbit tracking is done by solving the Lorentz force equation in a magnetic
+    field-
+    a=(q/m)*(v x B)
+    
+    solve_ivp takes the Lorentz force equation written with velocities-
+    vdot=(q/m)*(v x B)
+    
+    This along with the initial position and velocity (inferred from the 
+    energy, theta and phi) gives the value of the state vector (position and 
+    velocity) at all times.
 
     Parameters
     ----------
@@ -253,7 +426,7 @@ def single_particle_track(xIni, energy, theta, phi=0, species='H',
         Angle with the x-axis (radians).
         The default is 0.
     species : string, optional
-        Species code.
+        Species code. 
         The default is 'H'.
     timesteps : int
         Number of timesteps.
@@ -271,77 +444,35 @@ def single_particle_track(xIni, energy, theta, phi=0, species='H',
                posArr[4]=vy(t)
                posArr[5]=vz(t)
     """
-
+      
+    # Total time for the integration
+    totTime = timesteps*steplength
+    
     # Get the initial velocity of the particle in cartesian coordinates
-    vIni = initialize_particle(energy, theta, phi=phi, species=species)
+    vIni = initialize_particle(energy,
+                               theta,
+                               phi=phi,
+                               species=species)
 
-    # Gamma is constant: Lorentz force does no work in a pure magnetic field
+    # Gamma factor
     speed = np.linalg.norm(vIni)
-    gamma = 1.0 / np.sqrt(1.0 - (speed**2 / const.c**2))
+    gamma = 1/np.sqrt(1-(speed**2/const.c**2))
 
-    # Effective charge-to-mass ratio (relativistic)
-    qm_gamma = charge_to_mass_ratio(species) / gamma
+    # Charge to mass ratio
+    qm = charge_to_mass_ratio(species)
+    
+    # Initial conditions array
+    initCond = np.concatenate((xIni,vIni))
 
-    # Pre-allocate output arrays
-    positions  = np.empty((3, timesteps))
-    velocities = np.empty((3, timesteps))
-
-    x = xIni.copy().astype(float)
-    v = vIni.copy().astype(float)
-
-    positions[:, 0]  = x
-    velocities[:, 0] = v
-
-    dt = steplength
-    half_qm_gamma_dt = 0.5 * qm_gamma * dt
-
-    for i in range(1, timesteps):
-
-        r = np.sqrt(x[0]**2 + x[1]**2)
-        z = x[2]
-
-        # Outside interpolation domain — particle has left the machine
-        if r > 0.45 or np.abs(z) > 1.0:
-            positions[:, i:]  = x[:, np.newaxis]
-            velocities[:, i:] = 0.0
-            break
-
-        Br = BrInterpolator(z, r)[0]
-        Bz = BzInterpolator(z, r)[0]
-
-        if r > 0.0:
-            inv_r = 1.0 / r
-            Bx = Br * x[0] * inv_r
-            By = Br * x[1] * inv_r
-        else:
-            Bx = 0.0
-            By = 0.0
-
-        # Boris rotation step (no electric field)
-        tx = half_qm_gamma_dt * Bx
-        ty = half_qm_gamma_dt * By
-        tz = half_qm_gamma_dt * Bz
-        t_dot = tx*tx + ty*ty + tz*tz
-        sx = 2.0 * tx / (1.0 + t_dot)
-        sy = 2.0 * ty / (1.0 + t_dot)
-        sz = 2.0 * tz / (1.0 + t_dot)
-
-        # v' = v + v × t
-        vpx = v[0] + v[1]*tz - v[2]*ty
-        vpy = v[1] + v[2]*tx - v[0]*tz
-        vpz = v[2] + v[0]*ty - v[1]*tx
-
-        # v_new = v + v' × s
-        v[0] = v[0] + vpy*sz - vpz*sy
-        v[1] = v[1] + vpz*sx - vpx*sz
-        v[2] = v[2] + vpx*sy - vpy*sx
-
-        x = x + v * dt
-
-        positions[:, i]  = x
-        velocities[:, i] = v
-
-    return np.vstack([positions, velocities])
+    # Solve the inital value problem for the position and velocity
+    stateVec = solve_ivp(fun = integrand_relativistic,              # f(y,t)
+                         t_span = (0,totTime),                      # Time domain over which we want the solution
+                         y0 = initCond,                             # Initial conditions
+                         t_eval = np.linspace(0,totTime,timesteps), # Timesteps at which to save the state vector
+                         args = (species, qm, gamma,),              # Other arguments in 'integrand'
+                         dense_output = False)                      # Don't need the dense output since we are only interested in the state vector at the specified timesteps
+    
+    return stateVec.y
 
 def compute_tracks_par(i, planePoints, energy, thetaLaunchArr, phiLaunchArr, species):
     """
@@ -2377,71 +2508,6 @@ def generate_detector_response(filenameEqdsk, filenameReactivity,
     
     return detResponseArr
 
-def detector_angle_optimization(detPos, detSize, bendRad, tubeAng, filenameEqdsk, makeplot=False):
-    """
-    This function generates particle tracks for a set of detector angles and finds the best one.
-
-    Here, best is defined as the angle which minimizes the impact parameter of each particle track.
-    i.e. The angle that gives the best view into the core of the plasma
-    """
-
-    # Angle array
-    angleArr = np.arange(250, 310, 2)
-    angleArrRad = (np.pi/180) * angleArr
-    # Impact parameter array
-    minImpactParams = np.zeros_like(angleArr, dtype=float)
-
-    # Generate the magnetic field variables
-    b_field_interpolation(filenameEqdsk)
-
-    # Go over each angle and generate the particle tracks
-    for i in range(len(angleArr)):
-
-        currTracks = generate_tracks_aperture(detPos = detPos, 
-                                              detPhi = angleArrRad[i], 
-                                              detSize = detSize, 
-                                              bendRad = bendRad, 
-                                              tubeAng = tubeAng)
-
-        # Go over each track and get the impact parameter
-        impactParams = np.zeros(shape=len(currTracks))
-
-        for j in range(len(currTracks)):
-
-            # xy-positions
-            xPosArr = currTracks[j][0]
-            yPosArr = currTracks[j][1]
-
-            rPosArr = np.sqrt(xPosArr**2 + yPosArr**2)
-
-            impactParams[j] = np.min(rPosArr)
-
-        minImpactParams[i] = np.average(impactParams)
-
-    # Set all nan values to a large number
-    minImpactParams = np.nan_to_num(minImpactParams, nan=0.1)
-
-    # Calculate the optimal angle
-    minIdx = np.argmin(minImpactParams)
-    optimalAngle = int(angleArr[minIdx])
-
-    print(f'The optimal angle is {optimalAngle} deg')
-
-    if makeplot:
-
-        fig = plt.figure(figsize=(12, 8), tight_layout=True)
-        ax = fig.add_subplot(111)
-
-        ax.plot(angleArr, minImpactParams)
-
-        ax.set_xlabel('Detector angle [deg]')
-        ax.set_ylabel('Impact Parameter [m]')
-
-        plt.show()
-
-    return optimalAngle
-
-# Plot normalized detector response function
 if __name__ == '__tempmain__':
     """
     Used to generate and plot the normalized detector response function for a given magnetic equilibrium and detector geometry. 
@@ -2463,7 +2529,6 @@ if __name__ == '__tempmain__':
                                    cellSize=1e-2, errorLim=None, maxParticles=500,
                                    makeplot=True, savename='volume_weights_0.7m_10deg')
 
-# Save normalized detector response function
 if __name__ == '__tempmain__':
     """
     Used to generate the detector response for a given magnetic equilibrium, 
@@ -2524,8 +2589,7 @@ if __name__ == '__tempmain__':
     detResponse = generate_detector_response(filenameEqdsk, filenameReactivity, detPosArr, detPhiArr, detSizeArr, bendRadArr, tubeAngArr,
                                              makeplot=True, savename='detector_response_with_maxwellian.npz')
     
-# Check effect of different distribution functions
-if __name__ == '__tempmain__':
+if __name__ == '__main__':
     """
     Check effect of maxwellian and fast ion components on the detector response.
     """
@@ -2595,7 +2659,7 @@ if __name__ == '__tempmain__':
     
     plt.show()
 
-# Check particle tracks
+
 if __name__ == '__tempmain__':
     """
     Used to check the angle of a specific detector to make sure it sees the core of the plasma.
@@ -2607,7 +2671,7 @@ if __name__ == '__tempmain__':
     
     detPos = np.array([-0.257,  0.307,  0.5])
     
-    detPhi = (np.pi/180) * (250)
+    detPhi = (np.pi/180) * (280)
     
     detRad = 0.5 # inches
     detSize = (np.pi*detRad*detRad) / 1550
@@ -2619,20 +2683,4 @@ if __name__ == '__tempmain__':
     # Save the particle tracks
     savename = '/home/sanwalka/synthetic_proton_detector/particle_tracks/track_data_0.7m_10deg.pkl'
     
-    openingTracks = generate_tracks_aperture(detPos, detPhi, detSize, bendRad, tubeAng, makeplot=True, saveplot=False, savename=savename)
-
-# Find the optimal angle for a given detector position
-if __name__ == '__main__':
-
-    filenameEqdsk='/home/sanwalka/synthetic_proton_detector/eqdsk/wham_hts_eqdsk_for_kunal'
-
-    detPos = np.array([-0.257,  0.307,  0.5])
-    
-    detRad = 0.5 # inches
-    detSize = (np.pi*detRad*detRad) / 1550
-    
-    bendRad = 0.7
-    
-    tubeAng = 10 * np.pi/180
-
-    optimalAngle = detector_angle_optimization(detPos, detSize, bendRad, tubeAng, filenameEqdsk, makeplot=True)
+    openingTracks = generate_tracks_aperture(detPos, detPhi, detSize, bendRad, tubeAng, makeplot=True, saveplot=True, savename=savename)
