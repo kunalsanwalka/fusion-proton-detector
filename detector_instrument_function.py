@@ -21,17 +21,17 @@ os.environ["NUMEXPR_NUM_THREADS"] = "1"
 import subprocess
 import csv
 import time
-import random
 import pickle
 import numpy as np
 import scipy as sc
 import scipy.constants as const
 import matplotlib.pyplot as plt
-from scipy.integrate import solve_ivp
 from scipy.spatial.transform import Rotation as R
 from random_geometry_points.plane import Plane
 from multiprocessing import Pool, cpu_count
 from functools import partial
+
+from geometry_utils import hit_detector, through_the_core
 
 plt.rcParams.update({'font.size': 22})
 plt.switch_backend('TkAgg')
@@ -228,17 +228,144 @@ def initialize_particle(energy,theta,phi=0,species='D'):
     
     return velArr
 
+def batch_particle_tracks(xIniArr, energy, thetaArr, phiArr, species='H',
+                          timesteps=50, steplength=1e-9):
+    """
+    This function tracks the motion of a whole batch of particles through the
+    magnetic field at once, given their initial positions and velocities.
+
+    This is the vectorized form of single_particle_track: instead of a
+    Python loop calling the B-field interpolators once per particle per
+    timestep, it steps every particle together and calls the interpolators
+    once per timestep for the whole batch (via grid=False evaluation). The
+    physics (relativistic Boris pusher, constant gamma) is identical to
+    single_particle_track, just batched — trajectories match it bit-for-bit.
+
+    Parameters
+    ----------
+    xIniArr : np.array
+        Initial positions of the particles.
+        Shape- (N, 3)
+    energy : float
+        Energy of the particles (eV). Shared across the batch.
+    thetaArr : np.array
+        Angle with the z-axis for each particle (radians). Shape- (N,)
+    phiArr : np.array
+        Angle with the x-axis for each particle (radians). Shape- (N,)
+    species : string, optional
+        Species code.
+        The default is 'H'.
+    timesteps : int
+        Number of timesteps.
+    steplength : float
+        Size of each timestep (seconds)
+
+    Returns
+    -------
+    stateVecs : np.array
+        State vector as a function of time for every particle.
+        Shape- (N, 6, timesteps), stacking [x,y,z,vx,vy,vz] per particle -
+        the same layout as np.array([single_particle_track(...), ...]).
+    """
+
+    xIniArr = np.asarray(xIniArr, dtype=float)
+    thetaArr = np.asarray(thetaArr, dtype=float)
+    phiArr = np.asarray(phiArr, dtype=float)
+    numParticles = xIniArr.shape[0]
+
+    # Initial velocity of every particle in cartesian coordinates
+    vIniArr = initialize_particle(energy, thetaArr, phi=phiArr, species=species).T
+
+    # Gamma is constant per particle: Lorentz force does no work in a pure magnetic field
+    speed = np.linalg.norm(vIniArr, axis=1)
+    gamma = 1.0 / np.sqrt(1.0 - (speed**2 / const.c**2))
+
+    # Effective charge-to-mass ratio (relativistic), per particle
+    qm_gamma = charge_to_mass_ratio(species) / gamma
+
+    # Pre-allocate output arrays (time-major for cheap per-step writes)
+    positions  = np.empty((timesteps, numParticles, 3))
+    velocities = np.empty((timesteps, numParticles, 3))
+
+    x = xIniArr.copy()
+    v = vIniArr.copy()
+
+    positions[0]  = x
+    velocities[0] = v
+
+    dt = steplength
+    half_qm_gamma_dt = 0.5 * qm_gamma * dt  # (N,)
+
+    # Particles still inside the interpolation domain
+    active = np.ones(numParticles, dtype=bool)
+
+    for i in range(1, timesteps):
+
+        r = np.sqrt(x[:, 0]**2 + x[:, 1]**2)
+        z = x[:, 2]
+
+        # Outside interpolation domain — particle has left the machine.
+        # Freeze its position and zero its velocity from here on, exactly
+        # like the per-particle break in single_particle_track.
+        newlyOut = active & ((r > 0.45) | (np.abs(z) > 1.0))
+        if np.any(newlyOut):
+            v[newlyOut] = 0.0
+            active = active & ~newlyOut
+
+        if np.any(active):
+
+            Br = BrInterpolator(z, r, grid=False)
+            Bz = BzInterpolator(z, r, grid=False)
+
+            with np.errstate(divide='ignore', invalid='ignore'):
+                inv_r = np.where(r > 0.0, 1.0 / r, 0.0)
+            Bx = Br * x[:, 0] * inv_r
+            By = Br * x[:, 1] * inv_r
+
+            # Boris rotation step (no electric field)
+            tx = half_qm_gamma_dt * Bx
+            ty = half_qm_gamma_dt * By
+            tz = half_qm_gamma_dt * Bz
+            t_dot = tx*tx + ty*ty + tz*tz
+            sx = 2.0 * tx / (1.0 + t_dot)
+            sy = 2.0 * ty / (1.0 + t_dot)
+            sz = 2.0 * tz / (1.0 + t_dot)
+
+            # v' = v + v × t
+            vpx = v[:, 0] + v[:, 1]*tz - v[:, 2]*ty
+            vpy = v[:, 1] + v[:, 2]*tx - v[:, 0]*tz
+            vpz = v[:, 2] + v[:, 0]*ty - v[:, 1]*tx
+
+            # v_new = v + v' × s
+            vNew = np.empty_like(v)
+            vNew[:, 0] = v[:, 0] + vpy*sz - vpz*sy
+            vNew[:, 1] = v[:, 1] + vpz*sx - vpx*sz
+            vNew[:, 2] = v[:, 2] + vpx*sy - vpy*sx
+
+            xNew = x + vNew * dt
+
+            v[active] = vNew[active]
+            x[active] = xNew[active]
+
+        positions[i]  = x
+        velocities[i] = v
+
+        if not np.any(active):
+            positions[i+1:]  = x[np.newaxis, :, :]
+            velocities[i+1:] = v[np.newaxis, :, :]
+            break
+
+    # (timesteps, N, 3) -> (N, 3, timesteps), then stack pos/vel -> (N, 6, timesteps)
+    return np.concatenate([positions.transpose(1, 2, 0), velocities.transpose(1, 2, 0)], axis=1)
+
 def single_particle_track(xIni, energy, theta, phi=0, species='H',
                           timesteps=50, steplength=1e-9):
     """
     This function tracks the motion of the particle through the magnetic field
     as a function of the inital position and velocity.
 
-    Uses a relativistic Boris pusher — the standard fixed-step, symplectic
-    integrator for magnetic orbit tracking. It requires exactly 1 B-field
-    evaluation per step (vs ~6 for RK45), with no adaptive-stepping overhead.
-    Gamma is constant throughout since the Lorentz force does no work in a
-    pure magnetic field.
+    Convenience wrapper around batch_particle_tracks for a single particle -
+    see that function for the actual (relativistic Boris pusher) integration.
 
     Parameters
     ----------
@@ -272,89 +399,12 @@ def single_particle_track(xIni, energy, theta, phi=0, species='H',
                posArr[5]=vz(t)
     """
 
-    # Get the initial velocity of the particle in cartesian coordinates
-    vIni = initialize_particle(energy, theta, phi=phi, species=species)
+    stateVecs = batch_particle_tracks(np.asarray([xIni]), energy,
+                                      np.asarray([theta]), np.asarray([phi]),
+                                      species=species, timesteps=timesteps,
+                                      steplength=steplength)
 
-    # Gamma is constant: Lorentz force does no work in a pure magnetic field
-    speed = np.linalg.norm(vIni)
-    gamma = 1.0 / np.sqrt(1.0 - (speed**2 / const.c**2))
-
-    # Effective charge-to-mass ratio (relativistic)
-    qm_gamma = charge_to_mass_ratio(species) / gamma
-
-    # Pre-allocate output arrays
-    positions  = np.empty((3, timesteps))
-    velocities = np.empty((3, timesteps))
-
-    x = xIni.copy().astype(float)
-    v = vIni.copy().astype(float)
-
-    positions[:, 0]  = x
-    velocities[:, 0] = v
-
-    dt = steplength
-    half_qm_gamma_dt = 0.5 * qm_gamma * dt
-
-    for i in range(1, timesteps):
-
-        r = np.sqrt(x[0]**2 + x[1]**2)
-        z = x[2]
-
-        # Outside interpolation domain — particle has left the machine
-        if r > 0.45 or np.abs(z) > 1.0:
-            positions[:, i:]  = x[:, np.newaxis]
-            velocities[:, i:] = 0.0
-            break
-
-        Br = BrInterpolator(z, r)[0]
-        Bz = BzInterpolator(z, r)[0]
-
-        if r > 0.0:
-            inv_r = 1.0 / r
-            Bx = Br * x[0] * inv_r
-            By = Br * x[1] * inv_r
-        else:
-            Bx = 0.0
-            By = 0.0
-
-        # Boris rotation step (no electric field)
-        tx = half_qm_gamma_dt * Bx
-        ty = half_qm_gamma_dt * By
-        tz = half_qm_gamma_dt * Bz
-        t_dot = tx*tx + ty*ty + tz*tz
-        sx = 2.0 * tx / (1.0 + t_dot)
-        sy = 2.0 * ty / (1.0 + t_dot)
-        sz = 2.0 * tz / (1.0 + t_dot)
-
-        # v' = v + v × t
-        vpx = v[0] + v[1]*tz - v[2]*ty
-        vpy = v[1] + v[2]*tx - v[0]*tz
-        vpz = v[2] + v[0]*ty - v[1]*tx
-
-        # v_new = v + v' × s
-        v[0] = v[0] + vpy*sz - vpz*sy
-        v[1] = v[1] + vpz*sx - vpx*sz
-        v[2] = v[2] + vpx*sy - vpy*sx
-
-        x = x + v * dt
-
-        positions[:, i]  = x
-        velocities[:, i] = v
-
-    return np.vstack([positions, velocities])
-
-def compute_tracks_par(i, planePoints, energy, thetaLaunchArr, phiLaunchArr, species):
-    """
-    Helper function to help compute the particle tracks in parallel.
-    """
-
-    stateVec = single_particle_track(xIni = planePoints[i],
-                                     energy = energy,
-                                     theta = thetaLaunchArr[i],
-                                     phi = phiLaunchArr[i],
-                                     species = species)
-
-    return i, stateVec
+    return stateVecs[0]
 
 def generate_tracks_detector(detPos, detSize, detTheta, detPhi,
                              filenameEqdsk = '',
@@ -433,7 +483,7 @@ def generate_tracks_detector(detPos, detSize, detTheta, detPhi,
     
     # Get random points on the detector
     planePoints = np.asarray(plane.create_random_points(numLaunchPos))
-    
+
     # Random theta pertubations for the particle launched
     thetaPerArr = np.random.uniform(-1, 1, numLaunchPos*numLaunchesPerPos) * acceptAng # radians
     # Random phi perturbations
@@ -443,46 +493,15 @@ def generate_tracks_detector(detPos, detSize, detTheta, detPhi,
     thetaLaunchArr = detTheta + thetaPerArr
     # Launch phi
     phiLaunchArr = detPhi + phiPerArr
-    
-    # Get the particle tracks
-    particleTracks = []
-    
-    # Particle number
-    particleNum = 1
-    
+
+    # Launch position for every particle: numLaunchesPerPos particles per detector point
+    xIniArr = np.repeat(planePoints, numLaunchesPerPos, axis=0)
+
     setupTime = time.time()
     # print('Time taken to set up track generation- '+str(setupTime-startTime)+' seconds')
 
-    # Go over each point
-    for point in planePoints:
-        
-        # Random perturbations per point
-        for i in range(numLaunchesPerPos):
-        
-            # Random theta perturbation
-            thetaPer = random.uniform(-1,1) * acceptAng # [radians]
-            # Random phi perturbation
-            phiPer = random.uniform(-1,1) * np.sqrt(acceptAng**2 - thetaPer**2)
-            
-            # Launch theta
-            thetaLaunch = detTheta + thetaPer
-            # Launch phi
-            phiLaunch = detPhi + phiPer
-            
-            # Increment
-            particleNum += 1
-            
-            # Single particle track
-            stateVec = single_particle_track(xIni = point,
-                                             energy = energy,
-                                             theta = thetaLaunch,
-                                             phi = phiLaunch,
-                                             species = species)
-            
-            particleTracks.append(stateVec)
-            
-    # Convert to numpy
-    particleTracks = np.array(particleTracks)
+    # Track every particle at once (vectorized Boris pusher)
+    particleTracks = batch_particle_tracks(xIniArr, energy, thetaLaunchArr, phiLaunchArr, species=species)
     
     if makeplot==True:
         
@@ -1111,7 +1130,92 @@ def generate_tracks_aperture(detPos, detPhi, detSize, bendRad, tubeAng,
 
     return openingTracks
 
-def volume_weights(detPos, detPhi, detSize, bendRad, tubeAng, 
+def _track_grid_hits(track, x0, y0, z0, cellSize, zSpacing, Nx, Ny, Nz):
+    """
+    Finds which voxels of the regular (x0,y0,z0)-anchored grid used by
+    volume_weights a single particle track passes through, and the
+    cumulative distance travelled along the track to the first arrival at
+    each voxel.
+
+    Since the grid is regular, the voxel a given track position falls into
+    can be computed directly by index arithmetic instead of comparing that
+    position against every grid point -- this replaces what used to be an
+    O(num_grid_points) brute-force distance check per track (the main cost
+    of volume_weights) with an O(1)-per-position lookup.
+
+    The "hit" tolerance replicates the original brute-force check exactly:
+    a track position counts as hitting a voxel if it's within half a cell
+    in x, y AND z. Since the z-grid spacing (zSpacing) is fixed at 2cm
+    regardless of cellSize, that tolerance is 0.5*cellSize in z too -- not
+    0.5*zSpacing -- so z-matching is stricter (or looser) than x/y whenever
+    cellSize != zSpacing, exactly as before.
+
+    Parameters
+    ----------
+    track : np.array
+        Single particle track (shape (6, num_positions), as returned by
+        generate_tracks_aperture).
+    x0, y0, z0 : float
+        Coordinates of the grid's first point (xArr[0], yArr[0], zArr[0]).
+    cellSize : float
+        Grid spacing in x and y, and the hit tolerance in all 3 dimensions.
+    zSpacing : float
+        Grid spacing in z.
+    Nx, Ny, Nz : int
+        Number of grid points in x, y, z.
+
+    Returns
+    -------
+    hitIdx : np.array of int
+        Linear indices (into volumeWeights/volumeDistances/threeDPoints) of
+        the voxels this track hit, each appearing once.
+    hitDist : np.array of float
+        Cumulative track distance at the first arrival at each of those
+        voxels.
+    """
+
+    positions = track[:3].T  # (numPositions, 3)
+    numPositions = positions.shape[0]
+
+    if numPositions > 1:
+        deltas = np.diff(positions, axis=0)
+        segmentLengths = np.linalg.norm(deltas, axis=1)
+        cumulativeDist = np.concatenate([[0.0], np.cumsum(segmentLengths)])
+    else:
+        cumulativeDist = np.array([0.0])
+
+    ixf = (positions[:, 0] - x0) / cellSize
+    iyf = (positions[:, 1] - y0) / cellSize
+    izf = (positions[:, 2] - z0) / zSpacing
+
+    ix = np.round(ixf).astype(int)
+    iy = np.round(iyf).astype(int)
+    iz = np.round(izf).astype(int)
+
+    # x/y always satisfy the tolerance once rounded, since grid spacing
+    # there equals cellSize; z needs an explicit check (see docstring).
+    zTolInCells = 0.5 * cellSize / zSpacing
+
+    valid = ((ix >= 0) & (ix < Nx) &
+            (iy >= 0) & (iy < Ny) &
+            (iz >= 0) & (iz < Nz) &
+            (np.abs(izf - iz) <= zTolInCells))
+
+    if not np.any(valid):
+        return np.array([], dtype=int), np.array([])
+
+    # Linear index matching the (Ny,Nx,Nz) C-order flattening produced by
+    # np.vstack(np.meshgrid(xArr, yArr, zArr)).reshape(3,-1).T in volume_weights
+    linIdx = iy[valid] * (Nx * Nz) + ix[valid] * Nz + iz[valid]
+    timeIdx = np.nonzero(valid)[0]
+
+    # Keep only the first (earliest-time) arrival at each voxel
+    uniqIdx, firstPos = np.unique(linIdx, return_index=True)
+    firstTimeIdx = timeIdx[firstPos]
+
+    return uniqIdx, cumulativeDist[firstTimeIdx]
+
+def volume_weights(detPos, detPhi, detSize, bendRad, tubeAng,
                    cellSize=1e-2, errorLim=1e-2, minParticles=50, maxParticles=200,
                    makeplot=False, savename=None):
     """
@@ -1174,16 +1278,23 @@ def volume_weights(detPos, detPhi, detSize, bendRad, tubeAng,
     
     xArr = np.arange(-0.1, 0.1+cellSize, cellSize)
     yArr = xArr
-    zArr = np.arange(-1, 1+2e-2, 2e-2)
+    zSpacing = 2e-2
+    zArr = np.arange(-1, 1+zSpacing, zSpacing)
 
     # Create an array of the 3D points
     # 1st index- point number
     # 2nd index- [x,y,z]
     threeDPoints = np.vstack(np.meshgrid(xArr, yArr ,zArr)).reshape(3,-1).T
 
+    # Grid shape/origin, used by _track_grid_hits to index straight into
+    # threeDPoints instead of comparing every track position against every
+    # grid point.
+    Nx, Ny, Nz = len(xArr), len(yArr), len(zArr)
+    x0, y0, z0 = xArr[0], yArr[0], zArr[0]
+
     # Array to store the weights of each 3D point
     volumeWeights = np.zeros(shape=(len(threeDPoints)))
-    
+
     # Array to store the distance of each voxel from the detector
     volumeDistances = np.zeros(shape=(len(threeDPoints)))
 
@@ -1198,200 +1309,58 @@ def volume_weights(detPos, detPhi, detSize, bendRad, tubeAng,
     # number of particles is reached
     i = 0 # Track number of iterations through the loop
 
-    # If errorLim is None, then we only stop when maxParticles is reached
-    if errorLim != None:
+    while True:
 
-        while (currError >= errorLim and totParticles[-1] <= maxParticles) or totParticles[-1] <= minParticles:
-        
-            startTime = time.time()
-            
-            # Old volume weights to track error
-            oldVolumeWeights = np.copy(volumeWeights)
-            
-            # Generate particle tracks given the detector geometry
-            openingTracks = generate_tracks_aperture(detPos=detPos, 
-                                                     detPhi=detPhi, 
-                                                     detSize=detSize, 
-                                                     bendRad=bendRad, 
-                                                     tubeAng=tubeAng,
-                                                     numLaunchPos=5,
-                                                     numLaunchesPerPos=5,
-                                                     makeplot=False)
-            
-            tracksGenerationTime = time.time()
-            # print(f'Time taken to generate tracks= {tracksGenerationTime - startTime}s')
+        # If errorLim is None, then we only stop when maxParticles is reached
+        if errorLim != None:
+            keepGoing = (currError >= errorLim and totParticles[-1] <= maxParticles) or totParticles[-1] <= minParticles
+        else:
+            keepGoing = totParticles[-1] <= maxParticles
 
-            # Go over each particle track and see which volume elements it went through
-            chunk_size = 10000  # Process grid points in chunks to avoid huge memory usage
-            
-            for j in range(len(openingTracks)):
-                
-                currTrack = openingTracks[j][:3]  # Only keep the position data (3, num_positions)
-                all_positions = currTrack.T  # shape: (num_positions, 3)
-                num_positions = all_positions.shape[0]
-                
-                # Calculate cumulative distance along track for each position
-                # distances[i] = total distance from detector (position 0) to position i
-                if num_positions > 1:
-                    # Distance between consecutive positions
-                    deltas = np.diff(all_positions, axis=0)  # (num_positions-1, 3)
-                    segment_lengths = np.linalg.norm(deltas, axis=1)  # (num_positions-1,)
-                    # Cumulative distance from start
-                    cumulative_dist = np.concatenate([[0], np.cumsum(segment_lengths)])  # (num_positions,)
-                else:
-                    cumulative_dist = np.array([0])
-                
-                # Process grid points in chunks
-                num_grid_points = len(threeDPoints)
-                
-                for chunk_start in range(0, num_grid_points, chunk_size):
-                    chunk_end = min(chunk_start + chunk_size, num_grid_points)
-                    grid_chunk = threeDPoints[chunk_start:chunk_end]  # (chunk_size, 3)
-                    
-                    # Reshape for broadcasting:
-                    # grid_chunk: (chunk_size, 3) -> (chunk_size, 1, 3)
-                    # all_positions: (num_positions, 3) -> (1, num_positions, 3)
-                    grid_reshaped = grid_chunk[:, np.newaxis, :]
-                    positions_reshaped = all_positions[np.newaxis, :, :]
-                    
-                    # Calculate distances for this chunk
-                    # Result shape: (chunk_size, num_positions, 3)
-                    distances = np.abs(grid_reshaped - positions_reshaped)
-                    
-                    # Find which grid points are within half cell size for each position
-                    # Shape: (chunk_size, num_positions)
-                    within_range = np.all(distances <= 0.5 * cellSize, axis=2)
-                    
-                    # For each grid point, find if it was hit and at which position index
-                    hit_mask = np.any(within_range, axis=1)  # (chunk_size,) - which points were hit
-                    
-                    # For hit points, find the FIRST position that hit them
-                    first_hit_indices = np.full(len(grid_chunk), -1, dtype=int)
-                    first_hit_indices[hit_mask] = np.argmax(within_range[hit_mask], axis=1)
-                    
-                    # Update volumeWeights and volumeDistances
-                    global_indices = np.arange(chunk_start, chunk_end)
-                    hit_global_indices = global_indices[hit_mask]
-                    hit_position_indices = first_hit_indices[hit_mask]
-                    
-                    # Increment weights
-                    volumeWeights[hit_global_indices] += 1
-                    
-                    # Update distances (use the cumulative distance at the hit position)
-                    volumeDistances[hit_global_indices] = cumulative_dist[hit_position_indices]
-                        
-            # Update the error
-            if len(openingTracks) > 0:
-                
-                currError = np.sum(volumeWeights - oldVolumeWeights)/np.sum(volumeWeights)
-                
-                errorArr.append(currError)
-                totParticles.append(totParticles[-1] + len(openingTracks))
-                
-                # print('Error = {}'.format(currError))
-                # print('Particle Number = {}'.format(totParticles[-1]))
-                
-            volumeTrackingTime = time.time()
-            # print(f'Time taken to check volumes = {volumeTrackingTime - tracksGenerationTime}s')
-                
-            i+=1
-    
-    else:
+        if not keepGoing:
+            break
 
-        while totParticles[-1] <= maxParticles:
-        
-            startTime = time.time()
-            
-            # Old volume weights to track error
-            oldVolumeWeights = np.copy(volumeWeights)
-            
-            # Generate particle tracks given the detector geometry
-            openingTracks = generate_tracks_aperture(detPos=detPos, 
-                                                    detPhi=detPhi, 
-                                                    detSize=detSize, 
-                                                    bendRad=bendRad, 
-                                                    tubeAng=tubeAng,
-                                                    numLaunchPos=5,
-                                                    numLaunchesPerPos=5,
-                                                    makeplot=False)
-            
-            tracksGenerationTime = time.time()
-            # print(f'Time taken to generate tracks= {tracksGenerationTime - startTime}s')
+        startTime = time.time()
 
-            # Go over each particle track and see which volume elements it went through
-            chunk_size = 10000  # Process grid points in chunks to avoid huge memory usage
-            
-            for j in range(len(openingTracks)):
-                
-                currTrack = openingTracks[j][:3]  # Only keep the position data (3, num_positions)
-                all_positions = currTrack.T  # shape: (num_positions, 3)
-                num_positions = all_positions.shape[0]
-                
-                # Calculate cumulative distance along track for each position
-                # distances[i] = total distance from detector (position 0) to position i
-                if num_positions > 1:
-                    # Distance between consecutive positions
-                    deltas = np.diff(all_positions, axis=0)  # (num_positions-1, 3)
-                    segment_lengths = np.linalg.norm(deltas, axis=1)  # (num_positions-1,)
-                    # Cumulative distance from start
-                    cumulative_dist = np.concatenate([[0], np.cumsum(segment_lengths)])  # (num_positions,)
-                else:
-                    cumulative_dist = np.array([0])
-                
-                # Process grid points in chunks
-                num_grid_points = len(threeDPoints)
-                
-                for chunk_start in range(0, num_grid_points, chunk_size):
-                    chunk_end = min(chunk_start + chunk_size, num_grid_points)
-                    grid_chunk = threeDPoints[chunk_start:chunk_end]  # (chunk_size, 3)
-                    
-                    # Reshape for broadcasting:
-                    # grid_chunk: (chunk_size, 3) -> (chunk_size, 1, 3)
-                    # all_positions: (num_positions, 3) -> (1, num_positions, 3)
-                    grid_reshaped = grid_chunk[:, np.newaxis, :]
-                    positions_reshaped = all_positions[np.newaxis, :, :]
-                    
-                    # Calculate distances for this chunk
-                    # Result shape: (chunk_size, num_positions, 3)
-                    distances = np.abs(grid_reshaped - positions_reshaped)
-                    
-                    # Find which grid points are within half cell size for each position
-                    # Shape: (chunk_size, num_positions)
-                    within_range = np.all(distances <= 0.5 * cellSize, axis=2)
-                    
-                    # For each grid point, find if it was hit and at which position index
-                    hit_mask = np.any(within_range, axis=1)  # (chunk_size,) - which points were hit
-                    
-                    # For hit points, find the FIRST position that hit them
-                    first_hit_indices = np.full(len(grid_chunk), -1, dtype=int)
-                    first_hit_indices[hit_mask] = np.argmax(within_range[hit_mask], axis=1)
-                    
-                    # Update volumeWeights and volumeDistances
-                    global_indices = np.arange(chunk_start, chunk_end)
-                    hit_global_indices = global_indices[hit_mask]
-                    hit_position_indices = first_hit_indices[hit_mask]
-                    
-                    # Increment weights
-                    volumeWeights[hit_global_indices] += 1
-                    
-                    # Update distances (use the cumulative distance at the hit position)
-                    volumeDistances[hit_global_indices] = cumulative_dist[hit_position_indices]
-                        
-            # Update the error
-            if len(openingTracks) > 0:
-                
-                currError = np.sum(volumeWeights - oldVolumeWeights)/np.sum(volumeWeights)
-                
-                errorArr.append(currError)
-                totParticles.append(totParticles[-1] + len(openingTracks))
-                
-                # print('Error = {}'.format(currError))
-                # print('Particle Number = {}'.format(totParticles[-1]))
-                
-            volumeTrackingTime = time.time()
-            # print(f'Time taken to check volumes = {volumeTrackingTime - tracksGenerationTime}s')
-                
-            i+=1
+        # Old volume weights to track error
+        oldVolumeWeights = np.copy(volumeWeights)
+
+        # Generate particle tracks given the detector geometry
+        openingTracks = generate_tracks_aperture(detPos=detPos,
+                                                 detPhi=detPhi,
+                                                 detSize=detSize,
+                                                 bendRad=bendRad,
+                                                 tubeAng=tubeAng,
+                                                 numLaunchPos=5,
+                                                 numLaunchesPerPos=5,
+                                                 makeplot=False)
+
+        tracksGenerationTime = time.time()
+        # print(f'Time taken to generate tracks= {tracksGenerationTime - startTime}s')
+
+        # Go over each particle track and see which volume elements it went through
+        for track in openingTracks:
+
+            hitIdx, hitDist = _track_grid_hits(track, x0, y0, z0, cellSize, zSpacing, Nx, Ny, Nz)
+
+            volumeWeights[hitIdx] += 1
+            volumeDistances[hitIdx] = hitDist
+
+        # Update the error
+        if len(openingTracks) > 0:
+
+            currError = np.sum(volumeWeights - oldVolumeWeights)/np.sum(volumeWeights)
+
+            errorArr.append(currError)
+            totParticles.append(totParticles[-1] + len(openingTracks))
+
+            # print('Error = {}'.format(currError))
+            # print('Particle Number = {}'.format(totParticles[-1]))
+
+        volumeTrackingTime = time.time()
+        # print(f'Time taken to check volumes = {volumeTrackingTime - tracksGenerationTime}s')
+
+        i+=1
 
     print(f'Number of loop iterations = {i}')
     print(f'Final error = {currError}')
@@ -1583,437 +1552,6 @@ def volume_weights(detPos, detPhi, detSize, bendRad, tubeAng,
         plt.show()
         
     return threeDPoints, volumeWeights, volumeDistances, errorArr, totParticles
-
-def on_segment(p,q,r):
-    """
-    This function checks if r lies on the line segment defined by (p,q).
-    
-    Code copied from- https://www.kite.com/python/answers/how-to-check-if-two-line-segments-intersect-in-python
-    which is why inline comments are sparse.
-
-    Parameters
-    ----------
-    p : list
-        Format- [xVal,yVal]
-        One end of the line segment.
-    q : list
-        Format- [xVal,yVal]
-        Other end of the line segment.
-    r : list
-        Format- [xVal,yVal]
-        Point which is being checked.
-
-    Returns
-    -------
-    boolean : True - r is on the line
-              False- r is not on the line.    
-    """
-
-    if r[0]<=max(p[0],q[0]) and r[0]>=min(p[0],q[0]) and r[1]<=max(p[1],q[1]) and r[1]>=min(p[1],q[1]):
-        return True
-    
-    return False
-
-def orientation(p,q,r):
-    """
-    This function checks the orientation of the 3 points p,q,r. Are they 
-    clockwise, counterclockwise or colinear with respect to each other.
-    
-    Code copied from- https://www.kite.com/python/answers/how-to-check-if-two-line-segments-intersect-in-python
-    which is why inline comments are sparse.
-
-    Parameters
-    ----------
-    p : list
-        Format- [xVal,yVal]
-        Point 1.
-    q : list
-        Format- [xVal,yVal]
-        Point 2.
-    r : list
-        Format- [xVal,yVal]
-        Point 3.
-
-    Returns
-    -------
-    int : 0 - colinear
-          1 - clockwise
-          2 - counterclockwise
-    """
-
-    val=((q[1]-p[1])*(r[0]-q[0]))-((q[0]-p[0])*(r[1]-q[1]))
-    
-    if val==0: 
-        return 0
-    
-    return 1 if val>0 else -1
-
-def line_intersection(seg1,seg2):
-    """
-    This function checks if 2 line segments intersect.
-    
-    Code copied from- https://www.kite.com/python/answers/how-to-check-if-two-line-segments-intersect-in-python
-    which is why inline comments are sparse.
-
-    Parameters
-    ----------
-    seg1 : list
-        Format- [[x1,y1],[x2,y2]]
-        Points defining line segment 1.
-    seg2 : list
-        Format- [[x1,y1],[x2,y2]]
-        Points defining line segment 2.
-
-    Returns
-    -------
-    boolean : True - seg1,seg2 intersect
-              False- seg2,seg2 do not intersect
-    """
-
-    #Get the 4 points that define the line segments
-    p1,q1=seg1
-    p2,q2=seg2
-
-    #Find all possible oprientations
-    o1=orientation(p1,q1,p2)
-    o2=orientation(p1,q1,q2)
-    o3=orientation(p2,q2,p1)
-    o4=orientation(p2,q2,q1)
-
-    #Check the general case
-    if o1!=o2 and o3!=o4:
-        return True
-
-    #Check the special cases
-    if o1==0 and on_segment(p1,q1,p2) : return True
-    if o2==0 and on_segment(p1,q1,q2) : return True
-    if o3==0 and on_segment(p2,q2,p1) : return True
-    if o4==0 and on_segment(p2,q2,q1) : return True
-
-    return False
-
-def line_plane_intersection(p0,p1,p_co,p_no,epsilon=1e-6):
-    """
-    This function checks if a line intersects a plane.
-    
-    The line is defined by 2 points- p0,p1.
-    The plane is defined by a vector normal to the plane p_n0 and a point on
-    the plane p_co.
-    
-    Code is copied from- https://stackoverflow.com/questions/5666222/3d-line-plane-intersection
-    which is why inline comments are sparse.
-
-    Parameters
-    ----------
-    p0 : np.array
-        Format- [xVal,yVal,zVal]
-        One point that defines the line.
-    p1 : np.array
-        Format- [xVal,yVal,zVal]
-        Other point that defines the line.
-    p_co : np.array
-        Format- [xVal,yVal,zVal]
-        Point on the plane.
-    p_no : np.array
-        Format- [xVal,yVal,zVal]
-        Vector normal to the plane.
-    epsilon : np.array, optional
-        Limit for how || the line can be to the plane. 
-        The default is 1e-6.
-
-    Returns
-    -------
-    np.array : [x,y,z] point of intersection if the line intersects the plane.
-               0 if the line is || to the plane
-    """
-
-    u=p1-p0
-    dot=np.dot(p_no,u)
-
-    if abs(dot)>epsilon:
-        
-        w=p0-p_co
-        fac=-np.dot(p_no,w)/dot
-        u=u*fac
-        
-        return p0+u
-
-    #Line segment is || to the plane.
-    return 0
-
-def close_to_line(point,lp1,lp2,epsilon=1e-4):
-    """
-    This function checks if a point is close to a line segment defined by lp1
-    and lp2.
-    
-    Code is copied from- http://www.fundza.com/vectors/point2line/index.html
-    which is why inline comments are sparse.
-
-    Parameters
-    ----------
-    point : np.array
-        Point to be checked.
-    lp1 : np.array
-        One end of the line segment.
-    lp2 : np.array
-        Other end of the line segment.
-    epsilon : np.array
-        Closeness parameter.
-        The default value is 1e-4
-
-    Returns
-    -------
-    bool
-        Whether the point is close to the line segment.
-    """
-    
-    line_vec=lp1-lp2
-    pnt_vec=lp1-point
-    line_len=np.sqrt(line_vec.dot(line_vec))
-    line_unitvec=line_vec/line_len
-    pnt_vec_scaled=pnt_vec*(1/line_len)
-    t=np.dot(line_unitvec,pnt_vec_scaled)
-    
-    if t<0:
-        t=0
-    elif t>1:
-        t=1
-    
-    nearest=line_vec*t
-    dist=np.sqrt((nearest-pnt_vec).dot(nearest-pnt_vec))
-    nearest=nearest+lp1
-    
-    if dist<=epsilon:
-        return True
-    else:
-        return False
-
-def close_to_detector(point,detSize,detPos):
-    """
-    This function checks if the point of intersection as calculated by
-    line_plane_intersection is close to the detector. i.e. is a valid hit on
-    the neutron detector.
-
-    Parameters
-    ----------
-    point : np.array
-        Point to be checked for closeness to the detector.
-    detSize : float
-        Size of the detector in m^3. Assume circular shape.
-    detPos : np.array
-        Position of the center of the detector.
-
-    Returns
-    -------
-    bool
-        Whether the point is close to the detector.
-    """
-    
-    #Get the maximum allowable distance
-    distLim=np.sqrt(detSize/np.pi)
-    
-    #Distance between the 2 points
-    dist=np.sqrt((point-detPos).dot(point-detPos))
-    
-    if dist<=distLim:
-        return True
-    else:
-        return False
-
-def hit_detector(particleTrack, detPos, detNorm, detSize):
-    """
-    This function checks if the particle hits the detector.
-    If the particle hits the detector, this function also returns the position
-    and velocity at the time of the hit.
-
-    Parameters
-    ----------
-    particleTrack : np.array
-        Singple particle track data.
-    detPos : np.array
-        Position of the center of the detector.
-    detNorm : np.array
-        Normal vector of the detector.
-    detSize : float
-        Size of the detector
-
-    Returns
-    -------
-    detectorHit : bool
-        Whether the particle hit the detector.
-        True- The particle hit the detector.
-        False- The particle did not hit the detector.
-    hitPos : np.array
-        Position of the hit.
-        Default is [0,0,0]
-    hitVel : np.array
-        Velocity of the hit.
-        Default is [0,0,0]
-    hitTrack : np.array
-        Particle track upto the detector hit.
-    """
-    
-    #Initialize the variables
-    detectorHit=False
-    hitPos=np.array([0,0,0])
-    hitVel=np.array([0,0,0])
-    hitTrack=[]
-    
-    #Go over the current track
-    for j in range(len(particleTrack[0])-1):
-        
-        #Position of the particle
-        point1=particleTrack[0:3,j]
-        
-        #Check if the track hits the wall
-        if hit_vessel(point1)==True:
-            #No need to track if the particle hits the vessel
-            break
-        
-        #Next point to define a line segment to test intersection
-        point2=particleTrack[0:3,j+1]
-        
-        #Check if the line intersects the plane
-        intPoint=line_plane_intersection(point1,point2,detPos,detNorm)
-        if type(intPoint)==np.ndarray:
-            
-            #Check if the point of intersection is close to the track and detector
-            onLine=close_to_line(intPoint,point1,point2)
-            onDetector=close_to_detector(intPoint,detSize,detPos)
-            if onLine==True and onDetector==True:
-                
-                #Update the values
-                detectorHit=True
-                hitPos=intPoint
-                hitVel=particleTrack[3:,j]
-                
-                #Only add the track up when it hits the detector
-                hitTrack=particleTrack[:,j+1]
-                
-                #Stop tracking if the particle hits the detector
-                break
-    
-    return detectorHit,hitPos,hitVel,hitTrack
-
-def hit_vessel(point):
-    """
-    This function tests if the particle has hit the vessel wall.
-
-    Parameters
-    ----------
-    point : np.array
-        Current position of the particle.
-        Format- [x,y,z] in meters
-
-    Returns
-    -------
-    bool
-        Whether the particle has hit the detector.
-        True- Particle has hit the vessel wall.
-        False- Particle has not hit the vessel wall.
-    """
-    
-    #Radial position
-    radPos=np.sqrt(point[0]**2+point[1]**2)
-    
-    #Radial boundary of the vessel
-    if radPos>=0.45:
-        return True
-    #Axial boundary of the vessel
-    if abs(point[2])>=1.44:
-        return True
-    
-    #Base case
-    return False
-
-def through_the_core(particleTrack,coreRad):
-    """
-    This function checks if the particle went through the core of the plasma as
-    defined by coreRad.
-    If the particle went through the core, it also returns the particle track
-    upto that point.
-
-    Parameters
-    ----------
-    particleTrack : np.array
-        Single particle track data.
-    coreRad : float
-        Radius of the core [m].
-
-    Returns
-    -------
-    throughTheCore : bool
-        Whether the particle went through the core.
-        True- The particle went through the core.
-        False- The particle did not go through the core.
-    coreTrack : np.array
-        Particle track data upto the point of leaving the core.
-    """
-    
-    #Initialize the variables
-    throughTheCore=False
-    inCore=False
-    coreTrack=[]
-    
-    #Go over the current track
-    for j in range(len(particleTrack[0])-1):
-        
-        #Position of the particle
-        point1=particleTrack[0:3,j]
-        
-        #Radial position of the particle
-        radPos=np.sqrt(point1[0]**2+point1[1]**2)
-        
-        #Check if it enters the core
-        if radPos<=coreRad:
-            
-            #Change flag state
-            inCore=True
-            
-        #Check if it leaves the core
-        if inCore==True:
-            
-            if radPos>=coreRad:
-                
-                #Only add the part until it leaves the core
-                coreTrack=particleTrack[:,:j+1]
-                
-                #Update the state
-                throughTheCore=True
-                
-                #No need to track further if particle leaves the core
-                break
-    
-    return throughTheCore,coreTrack
-
-def pad_array(arr):
-    """
-    This function pads all the sub arrays with nan values if arr is ragged.
-    
-    Code copied from-
-    https://stackoverflow.com/questions/24494356/how-to-find-min-max-values-in-array-of-variable-length-arrays-with-numpy
-    
-    I added an if-else that checks if the subarrays are lists or np.arrays
-    
-    Parameters
-    ----------
-    arr : list
-        Ragged list to be padded.
-
-    Returns
-    -------
-    np.array
-        Uniform array which has been padded with nan values.
-    """
-    
-    #Get the maximum length of a subarray
-    M = max(len(a) for a in arr)
-    
-    #Check if subarrays are lists or np.arrays
-    if type(arr[0])==np.ndarray:
-        return np.array([a.tolist() + [np.nan] * (M - len(a)) for a in arr])
-    else:
-        return np.array([a + [np.nan] * (M - len(a)) for a in arr])
 
 def three_d_fusion_reactivity(filenameReactivity, threeDPoints, makeplot=False):
     """
@@ -2543,7 +2081,7 @@ if __name__ == '__tempmain__':
                                              makeplot=True, savename='detector_response_with_maxwellian.npz')
     
 # Plot the detector array response for a given reactivity profile
-if __name__ == '__main__':
+if __name__ == '__tempmain__':
     """
     Calculate and plot the detector response for a given reactivity profile and detector geometry.
     """
@@ -2561,7 +2099,7 @@ if __name__ == '__main__':
     detPhiArr = np.array([292, 292, 288, 288, 286, 284, 280, 276, 268]) * (np.pi/180) # radians
 
     # Detector sizes
-    detRad = 0.5 # inches
+    detRad = 1.0 # inches
     detSizeArr = np.full(len(zPosArr), (np.pi*detRad*detRad) / 1550) # m^2
 
     # Tube bend radii
@@ -2653,7 +2191,7 @@ if __name__ == '__tempmain__':
     plt.show()
 
 # Check particle tracks
-if __name__ == '__tempmain__':
+if __name__ == '__main__':
     """
     Used to check the angle of a specific detector to make sure it sees the core of the plasma.
     """
@@ -2664,7 +2202,7 @@ if __name__ == '__tempmain__':
     
     detPos = np.array([-0.257,  0.307,  0.5])
     
-    detPhi = (np.pi/180) * (250)
+    detPhi = (np.pi/180) * (268)
     
     detRad = 0.5 # inches
     detSize = (np.pi*detRad*detRad) / 1550
