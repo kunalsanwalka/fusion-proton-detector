@@ -8,7 +8,7 @@ plt.switch_backend('TkAgg')
 # Change the font size
 plt.rcParams.update({'font.size': 26})
 
-dataObj = np.load('/home/sanwalka/synthetic_proton_detector/reactivity/predicted_reactivity_2d_faster_interpolator.npz')
+dataObj = np.load('/home/sanwalka/synthetic_proton_detector/reactivity/predicted_reactivity_10percent_fast_ions.npz')
 rArr2D = dataObj['rArr2D']
 zArr2D = dataObj['zArr2D']
 reactivity2D = dataObj['reactivity2D']

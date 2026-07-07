@@ -2383,6 +2383,26 @@ def detector_angle_optimization(detPos, detSize, bendRad, tubeAng, filenameEqdsk
 
     Here, best is defined as the angle which minimizes the impact parameter of each particle track.
     i.e. The angle that gives the best view into the core of the plasma
+
+    Parameters
+    ----------
+    detPos : np.array
+        Position of the center of the detector. [m]
+        [x, y, z]
+    detSize : float
+        Size of the detector (assume circular shape). [m^2]
+    bendRad : float
+        Bend radius of the collimating tube. [m]
+    tubeAng : float
+        Angle subtended by the collimating tube. [radians]
+    filenameEqdsk : string
+        Name/location of the eqdsk file.
+
+    Returns
+    -------
+    optimalAngle : float
+        Optimal angle for the detector to view the core plasma.
+        Units - deg
     """
 
     # Angle array
@@ -2424,8 +2444,6 @@ def detector_angle_optimization(detPos, detSize, bendRad, tubeAng, filenameEqdsk
     # Calculate the optimal angle
     minIdx = np.argmin(minImpactParams)
     optimalAngle = int(angleArr[minIdx])
-
-    print(f'The optimal angle is {optimalAngle} deg')
 
     if makeplot:
 
@@ -2524,6 +2542,45 @@ if __name__ == '__tempmain__':
     detResponse = generate_detector_response(filenameEqdsk, filenameReactivity, detPosArr, detPhiArr, detSizeArr, bendRadArr, tubeAngArr,
                                              makeplot=True, savename='detector_response_with_maxwellian.npz')
     
+# Plot the detector array response for a given reactivity profile
+if __name__ == '__main__':
+    """
+    Calculate and plot the detector response for a given reactivity profile and detector geometry.
+    """
+
+    ##############################################################################
+    # Detector geometry
+
+    # (x,y,z) positions. These are mounted on the CC inner wall.
+    zPosArr = np.arange(0.2, 0.61, 0.05)
+    xPos = -0.257
+    yPos = 0.307
+    detPosArr = np.array([[xPos, yPos, zPos] for zPos in zPosArr]) # meters
+
+    # Detector angles (after optimization)
+    detPhiArr = np.array([292, 292, 288, 288, 286, 284, 280, 276, 268]) * (np.pi/180) # radians
+
+    # Detector sizes
+    detRad = 0.5 # inches
+    detSizeArr = np.full(len(zPosArr), (np.pi*detRad*detRad) / 1550) # m^2
+
+    # Tube bend radii
+    bendRadArr = np.full(len(zPosArr), 1.2) # meters
+    
+    # Tube sector angles
+    tubeAngArr = np.full(len(zPosArr), 10 * np.pi/180) # radians
+    ##############################################################################
+
+    # 2D reactivity profile
+    filenameReactivity = '/home/sanwalka/synthetic_proton_detector/reactivity/predicted_reactivity_10percent_fast_ions.npz'
+
+    # eqdsk file
+    filenameEqdsk='/home/sanwalka/synthetic_proton_detector/eqdsk/wham_hts_eqdsk_for_kunal'
+
+    # Generate the detector response
+    detResponse = generate_detector_response(filenameEqdsk, filenameReactivity, detPosArr, detPhiArr, detSizeArr, bendRadArr, tubeAngArr,
+                                             makeplot=True, savename='detector_response_with_10percent_fast_ions.npz')
+
 # Check effect of different distribution functions
 if __name__ == '__tempmain__':
     """
@@ -2538,7 +2595,7 @@ if __name__ == '__tempmain__':
     detPosArr = np.array([[xPos, yPos, zPos] for zPos in zPosArr]) # meters
 
     # Detector angles
-    detPhiArr = np.array([296, 294, 292, 290, 288, 286, 284, 278, 273]) * (np.pi/180)
+    detPhiArr = np.array([292, 292, 288, 288, 286, 284, 280, 276, 268]) * (np.pi/180)
     ##############################################################################
 
     # Detector sizes
@@ -2622,7 +2679,7 @@ if __name__ == '__tempmain__':
     openingTracks = generate_tracks_aperture(detPos, detPhi, detSize, bendRad, tubeAng, makeplot=True, saveplot=False, savename=savename)
 
 # Find the optimal angle for a given detector position
-if __name__ == '__main__':
+if __name__ == '__tempmain__':
 
     filenameEqdsk='/home/sanwalka/synthetic_proton_detector/eqdsk/wham_hts_eqdsk_for_kunal'
 
@@ -2636,3 +2693,45 @@ if __name__ == '__main__':
     tubeAng = 10 * np.pi/180
 
     optimalAngle = detector_angle_optimization(detPos, detSize, bendRad, tubeAng, filenameEqdsk, makeplot=True)
+
+# Find the optimal angle for all of the detectors
+if __name__ == '__tempmain__':
+
+    filenameEqdsk='/home/sanwalka/synthetic_proton_detector/eqdsk/wham_hts_eqdsk_for_kunal'
+
+    zPosArr = np.arange(0.2, 0.61, 0.05)
+    xPos = -0.257
+    yPos = 0.307
+    detPosArr = np.array([[xPos, yPos, zPos] for zPos in zPosArr]) # meters
+    
+    detRad = 0.5 # inches
+    detSize = (np.pi*detRad*detRad) / 1550
+    
+    bendRad = 0.7
+    
+    tubeAng = 10 * np.pi/180
+
+    optimalAngleArr = np.zeros_like(zPosArr)
+
+    for i in range(len(detPosArr)):
+
+        print(f'Optimizing detector {i+1} of {len(detPosArr)}')
+
+        optimalAngleArr[i] = detector_angle_optimization(detPosArr[i], detSize, bendRad, tubeAng, filenameEqdsk)
+
+    np.savez(file = '/home/sanwalka/synthetic_proton_detector/data/optimal_angles_5cm_spacing.npz',
+             zPosArr = zPosArr,
+             optimalAngleArr = optimalAngleArr)
+
+    # Plot the optimal angles
+    fig = plt.figure(figsize=(12, 8), tight_layout=True)
+    ax = fig.add_subplot(111)
+
+    ax.scatter(zPosArr, optimalAngleArr, s=200)
+    ax.plot(zPosArr, optimalAngleArr, linewidth=3)
+
+    ax.set_title('Optimal Angles for detectors')
+    ax.set_xlabel('Z [m]')
+    ax.set_ylabel('Angle [deg]')
+
+    plt.show()
