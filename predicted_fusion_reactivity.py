@@ -251,8 +251,11 @@ def magnetic_equilibrium(filenameEqdsk, makeplot=False):
 
     # Start the script to create an .npz file with the quantities of interest
     # in the shared pleiades_env
+    # Resolved relative to this file (not the caller's cwd) so it still works
+    # when called from driver scripts living outside the root directory.
+    eqdskScriptPath = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'eqdsk_analysis_functions.py')
     subprocess.run(['/share/envs/pleiades_env/bin/python',
-                    'eqdsk_analysis_functions.py',
+                    eqdskScriptPath,
                     '-filename', filenameEqdsk], check=True)
 
     # Load the data from the .npz file made by this function
