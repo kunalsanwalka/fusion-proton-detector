@@ -6,8 +6,12 @@ Each `# %%` block below is a runnable cell (VSCode/Spyder/Jupyter) - run the
 one you need instead of editing detector_instrument_function.py.
 """
 
+import os
+import sys
+
 import numpy as np
 
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from detector_instrument_function import b_field_interpolation, generate_tracks_aperture
 
 # %% Check particle tracks

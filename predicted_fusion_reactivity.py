@@ -464,10 +464,10 @@ def build_flux_tube_geometry(rArr, zValArr, Rmesh, Zmesh, Bmag, magneticFlux):
 
     return rAlongTube_all, bNormArr_all, RmArr
 
-def dist_func_z_evol(f, vel, xsi, bNormArr, makeplot=False):
+def dist_func_z_evol(f, vel, xsi, bNormArr, zValArr=None, makeplot=False):
     """
     This function evolves the distribution along z for a given magnetic
-    equilibrium. It does this via the mu (1st adiabatic invariant) 
+    equilibrium. It does this via the mu (1st adiabatic invariant)
     conservation.
 
     Parameters
@@ -488,6 +488,10 @@ def dist_func_z_evol(f, vel, xsi, bNormArr, makeplot=False):
         build_flux_tube_geometry / _trace_flux_tube rather than here, so
         this function is now pure mu-conservation math with no equilibrium
         interpolation of its own.
+    zValArr : np.array, optional
+        z-positions corresponding to bNormArr, used only to label the
+        makeplot titles. If None, the plot titles report B/B0 instead of z.
+        The default is None.
     makeplot : boolean, optional
         Make a plot of the distribution function at 2 z-positions to make sure
         the function is working properly. The default is False.
@@ -571,9 +575,9 @@ def dist_func_z_evol(f, vel, xsi, bNormArr, makeplot=False):
         ax.set_aspect('equal')
         ax.set_xlabel(r'$v_{||}/v_0$')
         ax.set_ylabel(r'$v_{\perp}/v_0$')
-        ax.set_title(f'z = {np.round(zValArr[index], 2)}m', 
-                     pad=45)
-        
+        title = f'z = {np.round(zValArr[index], 2)}m' if zValArr is not None else f'B/B0 = {np.round(bNormArr[index], 2)}'
+        ax.set_title(title, pad=45)
+
         #### Off-midplane plot
 
         ax = fig.add_subplot(212)
@@ -599,8 +603,8 @@ def dist_func_z_evol(f, vel, xsi, bNormArr, makeplot=False):
         ax.set_aspect('equal')
         ax.set_xlabel(r'$v_{||}/v_0$')
         ax.set_ylabel(r'$v_{\perp}/v_0$')
-        ax.set_title(f'z = {np.round(zValArr[index], 2)}m', 
-                     pad=45)
+        title = f'z = {np.round(zValArr[index], 2)}m' if zValArr is not None else f'B/B0 = {np.round(bNormArr[index], 2)}'
+        ax.set_title(title, pad=45)
         
         plt.show()
     
@@ -1291,269 +1295,3 @@ def fusion_reactivity_rz(vel, xsi, zArr2D, rArr2D, f_rz, makeplot=False, savenam
                  reactivity2D = reactivity2D)
     
     return zArr2D, rArr2D, reactivity2D
-
-# Load pleiades output
-if __name__ == '__tempmain__':
-    """
-    Load the distribution function from a pleaides output.
-    """
-
-    # Pleaides output file location
-    filenamePleiades = '/home/sanwalka/synthetic_proton_detector/data/pleiades_260105053.h5'
-
-    # eqdsk output file location
-    filenameEqdsk = '/home/sanwalka/synthetic_proton_detector/eqdsk/wham_hts_eqdsk_for_kunal'
-
-    vPar, vPerp, zArr2D, rArr2D, f_rz = dist_func_rz_pleiades(filenamePleiades, filenameEqdsk)
-
-# Plot f at midplane
-if __name__ == '__tempmain__':
-    """
-    Plot the distribution function at the midplane
-    """
-
-    #########################################################################################
-    #### HTPD 2026 Plot
-    # Save a plot of the distribution function at z=0 for a 0.1keV Te case
-    _, _, _ = dist_func(n_fast = 5e18,
-                        n_max = 5e19,
-                        T_max = 0.03,
-                        R_m = 57,
-                        E_NBI = 25,
-                        theta_NBI = np.pi/4,
-                        T_e = 0.075,
-                        mu_i = 2,
-                        Z_eff = 3,
-                        gridsize = 500,
-                        makeplot = True,
-                        savename = 'dist_func_newbasis.png')
-    #########################################################################################
-
-# Plot f at z-positions
-if __name__ == '__tempmain__':
-    """
-    Plot the distribution function at 2 z-positions
-    """
-
-    #########################################################################################
-    #### HTPD 2026 Plot
-    vel, xsi, f = dist_func(n_fast = 5e18,
-                            n_max = 5e19,
-                            T_max = 1,
-                            R_m = 57,
-                            E_NBI = 25,
-                            theta_NBI = np.pi/4,
-                            T_e = 0.075,
-                            mu_i = 2,
-                            Z_eff = 3,
-                            gridsize = 500)
-    
-    # Location of magnetic equilibrium file
-    filenameEqdsk = '/home/sanwalka/synthetic_proton_detector/eqdsk/wham_hts_eqdsk_for_kunal'
-
-    # Load the magnetic equilibrium
-    Rmesh, Zmesh, Br, Bz, Bmag, magneticFlux = magnetic_equilibrium(filenameEqdsk)
-
-    # Radial distance where the distribution function is calculated from the midplane
-    rDist = 0.01 # [m]
-
-    # z-positions where we want the evolved distribution function
-    zValArr = np.linspace(0, 0.8, 20)
-
-    # Calculate the z-evolved distribution function
-    zEvolF, rValArr = dist_func_z_evol(f, vel, xsi, rDist, zValArr, Rmesh, Zmesh, Bmag, magneticFlux, makeplot=True)
-
-# Calculate reactivity for a single distribution function at the midplane
-if __name__ == '__tempmain__':
-    """
-    Test to see if the fusion reactivity calculator is working properly
-    """
-
-    # =============================================
-    # Test with a maxwellian
-    # =============================================
-
-    # Generate a maxwellian with 10keV
-    vel, xsi, f = dist_func(n_fast = 5,
-                            n_max = 5e19,
-                            T_max = 10,
-                            R_m = 57,
-                            E_NBI = 250,
-                            theta_NBI = np.pi/4,
-                            T_e = 0.075,
-                            mu_i = 2,
-                            Z_eff = 3,
-                            gridsize = 50,
-                            makeplot = True)
-    
-    vel_1d = vel[0, :]
-    xsi_1d = xsi[:, 0]
-
-    # Extend the distribution function
-    _, _, _ = extend_f(f, vel_1d, xsi_1d, makeplot=True)
-
-    fusion_cross_section()
-    reactivity = fusion_reactivity(f, vel_1d, xsi_1d)
-
-    print(reactivity/1e13)
-    
-# Calculate the reactivity along z for a given flux tube
-if __name__ == '__tempmain__':
-
-    # =============================================
-    # Test with a z-evolved maxwellian
-    # =============================================
-
-    # Generate a maxwellian at the midplane with 10keV
-    vel, xsi, f = dist_func(n_fast = 5,
-                            n_max = 5e19,
-                            T_max = 10,
-                            R_m = 57,
-                            E_NBI = 25,
-                            theta_NBI = np.pi/4,
-                            T_e = 0.075,
-                            mu_i = 2,
-                            Z_eff = 3,
-                            gridsize = 50)
-
-    vel_1d = vel[0, :]
-    xsi_1d = xsi[:, 0]
-
-    # Location of magnetic equilibrium file
-    filenameEqdsk = '/home/sanwalka/synthetic_proton_detector/eqdsk/wham_hts_eqdsk_for_kunal'
-    # Load the magnetic equilibrium
-    Rmesh, Zmesh, Br, Bz, Bmag, magneticFlux = magnetic_equilibrium(filenameEqdsk)
-
-    # z-positions where we want to calculate the reactivity
-    zArr = np.linspace(0, 0.8, 50)
-    # r-position at the midplane
-    rMid = 0.06 # m
-
-    # Evolve f along z
-    zEvolF, rValArr = dist_func_z_evol(f, vel, xsi, rMid, zArr, Rmesh, Zmesh, Bmag, magneticFlux)
-
-    reactivity1D = np.zeros(shape=len(zArr))
-
-    # Calculate the reactivity at each z position
-    fusion_cross_section()
-    for i in range(len(zArr)):
-
-        reactivity1D[i] = fusion_reactivity(zEvolF[i], vel_1d, xsi_1d)
-
-    # Plot the data
-    fig = plt.figure(figsize=(12, 8), tight_layout=True)
-    ax = fig.add_subplot(111)
-
-    ax.plot(zArr, reactivity1D)
-    # Smooth it a little
-    smoothedReactivity1D = sc.signal.savgol_filter(reactivity1D, window_length=5, polyorder=3)
-    ax.plot(zArr, smoothedReactivity1D)
-
-    ax.set_title(r'10keV Maxwellian (n$_e$ = 5$\cdot$10$^{19}$m$^{-3}$)')
-    ax.set_xlabel('Z [m]')
-    ax.set_ylabel(r'Reactivity [#/(m$^3$s)]')
-
-    plt.show()
-
-    # =============================================
-    # Test with a fast ion + maxwellian
-    # =============================================
-    
-    # Generate 10% fast ion plasma with a 1keV maxwellian
-    vel, xsi, f = dist_func(n_fast = 5e18,
-                            n_max = 5e19,
-                            T_max = 1,
-                            R_m = 57,
-                            E_NBI = 25,
-                            theta_NBI = np.pi/4,
-                            T_e = 0.075,
-                            mu_i = 2,
-                            Z_eff = 3,
-                            gridsize = 50)
-
-    vel_1d = vel[0, :]
-    xsi_1d = xsi[:, 0]
-
-    # Evolve f along z
-    zEvolF, rValArr = dist_func_z_evol(f, vel, xsi, rMid, zArr, Rmesh, Zmesh, Bmag, magneticFlux)
-
-    reactivity1D = np.zeros(shape=len(zArr))
-
-    # Calculate the reactivity at each z position
-    for i in range(len(zArr)):
-
-        reactivity1D[i] = fusion_reactivity(zEvolF[i], vel_1d, xsi_1d)
-
-    # Plot the data
-    fig = plt.figure(figsize=(12, 8), tight_layout=True)
-    ax = fig.add_subplot(111)
-
-    ax.plot(zArr, reactivity1D)
-    # Smooth it a little
-    smoothedReactivity1D = sc.signal.savgol_filter(reactivity1D, window_length=5, polyorder=3)
-    ax.plot(zArr, smoothedReactivity1D)
-
-    ax.set_title(r'1keV Maxwellian (n$_e$ = 5$\cdot$10$^{19}$m$^{-3}$) with 10% fast ions')
-    ax.set_xlabel('Z [m]')
-    ax.set_ylabel(r'Reactivity [#/(m$^3$s)]')
-
-    plt.show()
-    
-# Calculate 2D reactivity profile
-if __name__ == '__main__':
-    """
-    Calculate the 2D fusion reactivity profile
-    """
-    
-    # Location of magnetic equilibrium file
-    filenameEqdsk = '/home/sanwalka/synthetic_proton_detector/eqdsk/wham_hts_eqdsk_for_kunal'
-    
-    # Location to store the 2D fusion reactivity profile
-    savenameReactivity = '/home/sanwalka/synthetic_proton_detector/reactivity/predicted_reactivity_10percent_fast_ions.npz'
-    
-    # Get the r-z evolved distribution functions
-    rArr = np.linspace(0, 0.1, 10)
-    zArr = np.linspace(0, 0.8, 50)
-
-    # Use density and temperature profiles from Keisuke's paper.
-    nArr = 5e19 - 3e20*rArr
-    TeArr = 75 - (80*rArr)**2
-
-    # Fast ion component is 1/10 the maxwellian background
-    nFastArr = nArr/10
-    nMaxArr = nArr - nFastArr
-
-    # Assume the maxwellian background has a temperature of 30eV
-    TMaxArr = np.full(np.shape(rArr), 0.03)
-
-    # Zeff is flat at 2 for simplicity
-    ZeffArr = np.full(np.shape(rArr), 2)
-
-    # NBI parameters are the same for all flux surfaces
-    E_NBI = 25
-    theta_NBI = np.pi/4
-    mu_i = 2
-    
-    startTime = time.time()
-    vel, xsi, zArr2D, rArr2D, f_rz = dist_func_rz(rArr, 
-                                                  zArr, 
-                                                  nFastArr, 
-                                                  nMaxArr,
-                                                  TMaxArr,
-                                                  TeArr, 
-                                                  ZeffArr, 
-                                                  E_NBI, 
-                                                  theta_NBI, 
-                                                  mu_i, 
-                                                  filenameEqdsk)
-    distFuncTime = time.time()
-    print(f'Time taken to generate f_rz = {np.round(distFuncTime - startTime, 2)}s')
-    
-    # print('finished calculating the distribution functions')
-    
-    # Get the r-z evolved fusion reactivity profile
-    zArr2D, rArr2D, reactivity2D = fusion_reactivity_rz(vel, xsi, zArr2D, rArr2D, f_rz, 
-                                                        makeplot=True,
-                                                        savename=savenameReactivity)
-    reactivityTime = time.time()
-    print(f'Time taken to generate the reactivity = {np.round(reactivityTime - distFuncTime, 2)}s')

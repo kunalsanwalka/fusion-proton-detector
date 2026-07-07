@@ -6,9 +6,13 @@ Each `# %%` block below is a runnable cell (VSCode/Spyder/Jupyter) - run the
 one you need instead of editing detector_instrument_function.py.
 """
 
+import os
+import sys
+
 import numpy as np
 import matplotlib.pyplot as plt
 
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from detector_instrument_function import detector_angle_optimization
 
 # %% Find the optimal angle for a given detector position
