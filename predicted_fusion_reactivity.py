@@ -42,8 +42,9 @@ plt.switch_backend('TkAgg')
 # Change the font size
 plt.rcParams.update({'font.size': 26})
 
-global plotDir
+global plotDir, reactivityDir
 plotDir = '/home/sanwalka/synthetic_proton_detector/plots/'
+reactivityDir = '/home/sanwalka/synthetic_proton_detector/reactivity/'
 
 def dist_func(n_fast, n_max, T_max, R_m, E_NBI, theta_NBI, T_e, mu_i, Z_eff, gridsize=100, 
               makeplot=False, savename=None):
@@ -550,7 +551,7 @@ def dist_func_z_evol(f, vel, xsi, bNormArr, zValArr=None, makeplot=False):
         vPar = vel * xsi
         vPerp = vel * np.sqrt(1-xsi**2)
 
-        fig = plt.figure(figsize=(12, 16), tight_layout=True)
+        fig = plt.figure(figsize=(8, 16), tight_layout=True)
 
         #### Midplane plot
                 
@@ -578,7 +579,7 @@ def dist_func_z_evol(f, vel, xsi, bNormArr, zValArr=None, makeplot=False):
         ax.set_aspect('equal')
         ax.set_xlabel(r'$v_{||}/v_0$')
         ax.set_ylabel(r'$v_{\perp}/v_0$')
-        title = f'z = {np.round(zValArr[index], 2)}m' if zValArr is not None else f'B/B0 = {np.round(bNormArr[index], 2)}'
+        title = f'z = {np.round(zValArr[index], 2)}m' if zValArr is not None else r'$B/B_0$ = '+f'{np.round(bNormArr[index], 2)}'
         ax.set_title(title, pad=45)
 
         #### Off-midplane plot
@@ -588,7 +589,7 @@ def dist_func_z_evol(f, vel, xsi, bNormArr, zValArr=None, makeplot=False):
         # Normalize first, then clip to log-safe minimum BEFORE passing to contourf
         index = -3
         f_norm = zEvolf[index] / normVal
-        vmin_log = 1e-4
+        vmin_log = 1e-6
         f_norm = np.clip(f_norm, a_min=vmin_log, a_max=1)  # kill exact zeros
         
         levels = np.logspace(np.log10(vmin_log), 0, 100)   # log-spaced levels
@@ -606,7 +607,7 @@ def dist_func_z_evol(f, vel, xsi, bNormArr, zValArr=None, makeplot=False):
         ax.set_aspect('equal')
         ax.set_xlabel(r'$v_{||}/v_0$')
         ax.set_ylabel(r'$v_{\perp}/v_0$')
-        title = f'z = {np.round(zValArr[index], 2)}m' if zValArr is not None else f'B/B0 = {np.round(bNormArr[index], 2)}'
+        title = f'z = {np.round(zValArr[index], 2)}m' if zValArr is not None else r'$B/B_0$ = '+f'{np.round(bNormArr[index], 2)}'
         ax.set_title(title, pad=45)
         
         plt.show()
@@ -1196,7 +1197,7 @@ def compute_row_reactivity(i):
 
     return i, row
 
-def fusion_reactivity_rz(vel, xsi, zArr2D, rArr2D, f_rz, makeplot=False, savename=''):
+def fusion_reactivity_rz(vel, xsi, zArr2D, rArr2D, f_rz, makeplot=False, savename='', savefigname=''):
     """
     Wrapper function to calculate the fusion reactivity / unit volume for a
     given set of distribution functions on r-z.
@@ -1222,6 +1223,8 @@ def fusion_reactivity_rz(vel, xsi, zArr2D, rArr2D, f_rz, makeplot=False, savenam
         Make a plot of the fusion cross section. The default is False.
     savename : boolean, optional
         Save the reactivity data. The default is ''.
+    savefigname : boolean, optional
+        Save the reactivity plot. The default is ''.
 
     Returns
     -------
@@ -1278,21 +1281,65 @@ def fusion_reactivity_rz(vel, xsi, zArr2D, rArr2D, f_rz, makeplot=False, savenam
 
     if makeplot == True:
         
-        fig = plt.figure(figsize=(10, 4), tight_layout=True)
+        # Total reaction rate for the whole plasma. 
+        # This acts as a sanity check to make sure the reactivity is calculated correctly.
+
+        # Integrate over the whole plasma volume. 
+        # We can do this by integrating over the 2D grid and multiplying by the volume element (which is 2*pi*r*dr*dz in cylindrical coordinates)
+        dr = rArr2D[1,0] - rArr2D[0,0]
+        dz = zArr2D[0,1] - zArr2D[0,0]
+
+        volumeElement = 2*np.pi*rArr2D*dr*dz
+        totalReactionRate = np.sum(reactivity2D*volumeElement)
+        print(f'Total reaction rate in the plasma: {totalReactionRate:.2e} #/s')
+
+        # Interpolation function for the reactivity
+        points = np.vstack((rArr2D.flatten(), zArr2D.flatten())).T
+        reactivityFlat = reactivity2D.flatten()
+        reactivity_interp_func = sc.interpolate.LinearNDInterpolator(points, reactivityFlat, fill_value=0)
+
+        # Put the data onto a uniform grid for plotting
+        rArr = np.linspace(np.min(rArr2D), np.max(rArr2D), 200)
+        zArr = np.linspace(np.min(zArr2D), np.max(zArr2D), 200)
+        RARR, ZARR = np.meshgrid(rArr, zArr)
+        reactivityUniform = reactivity_interp_func(RARR.flatten(), ZARR.flatten()).reshape(RARR.shape)
+
+        fig = plt.figure(figsize=(15, 6), tight_layout=True)
         ax = fig.add_subplot(111)
-        
-        pltObj = ax.contourf(zArr2D, rArr2D, reactivity2D, levels=100, cmap='inferno')
-        
+
+        # We are using the inferno colormap
+        cmap = plt.cm.inferno.copy()
+        cmap.set_bad(cmap(0))
+        cmap.set_under(cmap(0))
+
+        pltObj = ax.contourf(ZARR, RARR, reactivityUniform, levels=100, cmap='inferno')
+        # Add the other 4 quadrants by symmetry
+        ax.contourf(-ZARR, RARR, reactivityUniform, levels=100, cmap='inferno')
+        ax.contourf(ZARR, -RARR, reactivityUniform, levels=100, cmap='inferno')
+        ax.contourf(-ZARR, -RARR, reactivityUniform, levels=100, cmap='inferno')
+
+        # Also add the limiter flux surface
+        ax.plot(zArr2D[-1], rArr2D[-1], color='white', label=r'$\Psi_{lim}$', linewidth=4)
+        ax.plot(-zArr2D[-1], rArr2D[-1], color='white', linewidth=4)
+        ax.plot(zArr2D[-1], -rArr2D[-1], color='white', linewidth=4)
+        ax.plot(-zArr2D[-1], -rArr2D[-1], color='white', linewidth=4)
+
+        # ax.set_aspect('equal')
         ax.set_xlabel('Z [m]')
         ax.set_ylabel('R[m]')
-        
-        cbar = fig.colorbar(pltObj, label=r'Reactivity [counts/(m$^3$s)]')
+
+        ax.legend(loc='upper right')
+
+        cbar = fig.colorbar(pltObj, label=r'Reactivity [#/(m$^3$s)]')
+
+        if savefigname != '':
+            plt.savefig(plotDir+savefigname, dpi=300)
         
         plt.show()
-        
+
     if savename != '':
         
-        np.savez(savename, 
+        np.savez(reactivityDir+savename, 
                  rArr2D = rArr2D,
                  zArr2D = zArr2D,
                  reactivity2D = reactivity2D)

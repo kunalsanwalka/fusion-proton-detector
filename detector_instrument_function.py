@@ -36,6 +36,10 @@ from geometry_utils import hit_detector, through_the_core
 plt.rcParams.update({'font.size': 22})
 plt.switch_backend('TkAgg')
 
+global plotDir, reactivityDir
+plotDir = '/home/sanwalka/synthetic_proton_detector/plots/'
+reactivityDir = '/home/sanwalka/synthetic_proton_detector/reactivity/'
+
 def charge_to_mass_ratio(species):
     """
     This function calculates the charge to mass ratio for a given species.
@@ -1637,7 +1641,7 @@ def three_d_fusion_reactivity(filenameReactivity, threeDPoints, makeplot=False):
     # Load from an .npz created from predicted_fusion_reactivity
     if filenameReactivity[-3:] == 'npz':
         
-        dataObj = np.load(filenameReactivity)
+        dataObj = np.load(reactivityDir+filenameReactivity)
         rArr2D = dataObj['rArr2D']
         zArr2D = dataObj['zArr2D']
         protonRate = dataObj['reactivity2D']

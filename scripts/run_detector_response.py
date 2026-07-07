@@ -19,6 +19,9 @@ import matplotlib.pyplot as plt
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from detector_instrument_function import generate_detector_response
 
+global plotDir
+plotDir = '/home/sanwalka/synthetic_proton_detector/plots'
+
 def detector_geometry():
     """
     Define the detector geometry (positions, angles, sizes, bend radii and tube angles)
@@ -94,7 +97,7 @@ def compare_reactivity_responses(filenameEqdsk, filenameReactivityList, labelLis
         ax.set_ylabel('Response [counts/ms]')
 
         if savename:
-            plt.savefig(savename)
+            plt.savefig(plotDir+savename)
 
         plt.show()
 
