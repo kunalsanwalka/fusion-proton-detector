@@ -331,18 +331,57 @@ def magnetic_equilibrium(filenameEqdsk, makeplot=False):
 
 def _trace_flux_tube(rDist, zValArr, Rmesh, Zmesh, Bmag, magneticFlux, BmagInterpolator):
     """
-    Precompute the r-values and normalized magnetic field values along each flux surface.
+    Follow a single flux tube from its midplane starting radius rDist out to
+    every z in zValArr, and report how r and B/B0 change along the way.
+
+    A flux tube is a curve of constant magnetic flux, so "tracing" it means
+    finding the flux contour that passes through (z=0, r=rDist) and reading
+    off that contour's r-value at each requested z. This r(z), B(z)/B0
+    mapping is exactly the geometry information dist_func_z_evol needs to
+    apply mu-conservation, and it used to be recomputed from scratch every
+    time a distribution function was evolved. It's now factored out here so
+    build_flux_tube_geometry can compute it once per flux surface.
+
+    Parameters
+    ----------
+    rDist : float
+        Midplane (z=0) radial starting position of the flux tube. [m]
+    zValArr : np.array
+        z-positions to evaluate the flux tube at. [m]
+    Rmesh, Zmesh : np.array
+        2D meshes of radial/axial positions from magnetic_equilibrium.
+    Bmag : np.array
+        |B| on the (Zmesh, Rmesh) grid. [Tesla]
+    magneticFlux : np.array
+        Magnetic flux on the (Zmesh, Rmesh) grid. [Weber]
+    BmagInterpolator : scipy.interpolate.RegularGridInterpolator
+        Interpolator for Bmag over (z, r). Built once by
+        build_flux_tube_geometry and passed in so it isn't rebuilt for
+        every flux tube.
+
+    Returns
+    -------
+    rValArr : np.array
+        r-position of the flux tube at each z in zValArr. [m]
+    bNormArr : np.array
+        B(z)/B(z=0) along the flux tube.
+    Rm : float
+        Mirror ratio of this flux tube: field strength at the mirror
+        throat divided by the midplane field strength.
     """
 
-    # Get the magnetic flux for the distribution function at the midplane
+    # Look up the flux value at (z=0, rDist), then contour the whole 2D
+    # flux map at that level to get the flux surface passing through it
     idx = np.abs(Rmesh[0] - rDist).argmin()
     midplaneFlux = magneticFlux[int(len(Zmesh)/2), idx]
 
+    # The flux surface of interest is a single closed/connected curve, so
+    # just take the first contour skimage finds at this level
     contours = skimage.measure.find_contours(magneticFlux, level=midplaneFlux)
-    
+    contour = contours[0]
+
     # find_contours returns fractional indices — interpolate into the real
     # coordinate arrays rather than rounding to the nearest grid point
-    contour = contours[0]
     z_axis = Zmesh[:, 0]
     r_axis = Rmesh[0]
 
@@ -351,17 +390,21 @@ def _trace_flux_tube(rDist, zValArr, Rmesh, Zmesh, Bmag, magneticFlux, BmagInter
     z_vals = z_idx_interp(contour[:, 0])
     r_vals = r_idx_interp(contour[:, 1])
 
+    # r as a function of z along this flux tube, so it can be sampled at
+    # both the requested zValArr and later at the mirror throat
     contour_interp = sc.interpolate.interp1d(z_vals, r_vals, bounds_error=False, fill_value=np.nan)
     rValArr = contour_interp(zValArr)
 
+    # Field strength along the traced path, normalized to the midplane
+    # value to give B(z)/B0
     points = np.array([zValArr, rValArr]).T
     bMagArr = BmagInterpolator(points)
     bNorm = BmagInterpolator([0, rDist])[0]
-
-    # B/B_0
     bNormArr = bMagArr / bNorm
 
-    # Mirror ratio
+    # Mirror ratio: field strength at the throat (95% of the z-domain,
+    # since the equilibrium data can be noisy right at the grid edge)
+    # relative to the midplane
     zThroat = np.max(Zmesh) * 0.95
     rAtThroat = contour_interp(zThroat)
     bMagInThroat = BmagInterpolator([zThroat, rAtThroat])[0]
@@ -373,9 +416,40 @@ def build_flux_tube_geometry(rArr, zValArr, Rmesh, Zmesh, Bmag, magneticFlux):
     """
     One-time precomputation: traces the flux tube and B(z)/B0 profile for
     every starting radius in rArr. None of this depends on the particle
-    distribution, so it's computed once before the parallel sweep starts.
+    distribution (density, temperature, etc.), only on rArr and the
+    magnetic equilibrium, so it's computed once before the parallel sweep
+    in dist_func_rz starts instead of being redone inside every worker.
+
+    Parameters
+    ----------
+    rArr : np.array
+        Midplane radial positions to trace flux tubes from. [m]
+    zValArr : np.array
+        z-positions to evaluate each flux tube at. [m]
+    Rmesh, Zmesh : np.array
+        2D meshes of radial/axial positions from magnetic_equilibrium.
+    Bmag : np.array
+        |B| on the (Zmesh, Rmesh) grid. [Tesla]
+    magneticFlux : np.array
+        Magnetic flux on the (Zmesh, Rmesh) grid. [Weber]
+
+    Returns
+    -------
+    rAlongTube_all : np.array
+        Shape (len(rArr), len(zValArr)). r-position of each flux tube at
+        each z. [m]
+    bNormArr_all : np.array
+        Shape (len(rArr), len(zValArr)). B(z)/B0 along each flux tube, fed
+        into dist_func_z_evol to apply mu-conservation.
+    RmArr : np.array
+        Shape (len(rArr),). Mirror ratio of each flux tube. Passed into
+        dist_func as R_m so the midplane distribution function for each
+        flux surface is generated with a mirror ratio consistent with its
+        own field geometry, rather than a single value shared by all r.
     """
 
+    # Geometry-only, so build once here and reuse for every flux tube
+    # instead of rebuilding it inside _trace_flux_tube on every call
     BmagInterpolator = sc.interpolate.RegularGridInterpolator((Zmesh[:, 0], Rmesh[0]), Bmag)
 
     n_r, n_z = len(rArr), len(zValArr)
@@ -409,7 +483,11 @@ def dist_func_z_evol(f, vel, xsi, bNormArr, makeplot=False):
         To get the 1D array, use X[:,0].
         Units - normalized. 0 = v_perp ; 1 = v_par
     bNormArr: np.array
-        Normalized magnetic field strength along the flux tube.
+        Normalized magnetic field strength along the flux tube, i.e.
+        B(z)/B(z=0). Precomputed once per flux tube by
+        build_flux_tube_geometry / _trace_flux_tube rather than here, so
+        this function is now pure mu-conservation math with no equilibrium
+        interpolation of its own.
     makeplot : boolean, optional
         Make a plot of the distribution function at 2 z-positions to make sure
         the function is working properly. The default is False.
@@ -417,9 +495,8 @@ def dist_func_z_evol(f, vel, xsi, bNormArr, makeplot=False):
     Returns
     -------
     zEvolf : np.array
-        3D array with the z-evolved distribution function.
-    rValArr : np.array
-        r-values that map along the flux tube specified by rDist.
+        3D array with the z-evolved distribution function, one 2D f per
+        z-position in bNormArr (index 0 = z-position).
     """
 
     # 3D array to store the z-evolved distribution function
@@ -534,6 +611,13 @@ def compute_row_fz(i):
     Computes f along z for a given set of r and z values. This is purely a
     helper function that allows dist_func_rz to run things in
     parallel.
+
+    Takes only the row index i and reads everything else (the profile
+    arrays, NBI parameters, and the precomputed flux tube geometry from
+    build_flux_tube_geometry) from module globals set by _init_worker_fz.
+    This means pool.map only has to pickle an int per task, while the
+    bulkier shared arrays are sent to each worker process once via the
+    Pool initializer instead of once per row of rArr.
     """
 
     # Get the distribution function at the midplane
@@ -625,6 +709,10 @@ def dist_func_rz(rArr, zArr, nFastArr, nMaxArr, TMaxArr, TeArr, ZeffArr, E_NBI, 
     _ZeffArr = None
     _gridsize = None
 
+    # Pool initializer: runs once per worker process (not once per task) and
+    # stashes the shared arrays as module globals, so compute_row_fz can be
+    # called with just an index i instead of having every one of the
+    # len(rArr) tasks re-pickle and re-send the full arrays.
     def _init_worker_fz(bNormArr_all, rAlongTube_all, nFastArr, nMaxArr, TMaxArr, RmArr, E_NBI, theta_NBI, TeArr, mu_i, ZeffArr, gridsize):
 
         global _bNormArr_all, _rAlongTube_all, _nFastArr, _nMaxArr, _TMaxArr, _RmArr, _E_NBI, _theta_NBI, _TeArr, _mu_i, _ZeffArr, _gridsize
@@ -650,7 +738,9 @@ def dist_func_rz(rArr, zArr, nFastArr, nMaxArr, TMaxArr, TeArr, ZeffArr, E_NBI, 
     # Load the magnetic equilibirum
     Rmesh, Zmesh, Br, Bz, Bmag, magneticFlux = magnetic_equilibrium(filenameEqdsk,
                                                                     makeplot=False)
-    
+
+    # Trace all flux tubes once here, before the parallel sweep, instead of
+    # inside each worker (see build_flux_tube_geometry for why)
     rAlongTube_all, bNormArr_all, RmArr = build_flux_tube_geometry(rArr, zArr, Rmesh, Zmesh, Bmag, magneticFlux)
        
     # =========================================================================
@@ -800,11 +890,18 @@ def fusion_cross_section(makeplot=False):
 
     # ddptFusionCXFunc = sc.interpolate.CubicSpline(energyGrid, DDa_xs)
 
-    # Build once, same place ddptFusionCXFunc is currently built.
+    # The cross section spans many orders of magnitude and rises roughly as
+    # a power law with energy near threshold, so it is much closer to a
+    # straight line in log(E)-log(sigma) space than in linear space.
+    # Interpolating there is both more accurate than linear interpolation
+    # and cheaper to evaluate than re-fitting/evaluating a CubicSpline
+    # object, which matters because build_fusion_kernel calls this once per
+    # (v1,xsi1,v2,xsi2) grid point pair.
     log_E = np.log(energyGrid)
     log_sigma = np.log(np.maximum(DDa_xs, 1e-300))  # floor avoids log(0) at threshold
 
     def ddptFusionCXFunc(E):
+        # Clamp instead of extrapolating past the tabulated cross section data
         E_clamped = np.clip(E, energyGrid[0], energyGrid[-1])
         return np.exp(np.interp(np.log(E_clamped), log_E, log_sigma))
     
@@ -891,22 +988,85 @@ def extend_f(f, v, xsi, makeplot=False):
     return f_full, v, xi_full_1d
 
 def _trapz_weights(x):
+    """
+    Quadrature weight vector for the composite trapezoidal rule on a
+    uniformly spaced grid x, such that sum(w * y) == np.trapezoid(y, x).
+
+    Every interior point covers a full grid spacing dx; the two endpoints
+    are the outer edge of only one trapezoid instead of two, so they get
+    half weight. This lets build_fusion_kernel bake the entire trapezoidal
+    integration scheme into the kernel matrix once, instead of calling
+    np.trapezoid on every evaluation of fusion_reactivity.
+
+    Parameters
+    ----------
+    x : 1D np.array
+        Uniformly spaced grid.
+
+    Returns
+    -------
+    w : 1D np.array
+        Trapezoidal weight for each point in x.
+    """
 
     dx = x[1] - x[0]
-    
+
     w = np.full(len(x), dx)
-    
+
+    # Endpoints border only one trapezoid instead of two
     w[0] *= 0.5
     w[-1] *= 0.5
-    
+
     return w
 
 def build_fusion_kernel(v, xsi, chunk_size=4):
     """
-    One-time precomputation. v, xsi must be the exact grids you will use
-    for every subsequent call to fusion_reactivity.
+    One-time precomputation of the fusion reactivity kernel matrix K.
 
-    Returns K (N x N), plus the extended grids for bookkeeping.
+    fusion_reactivity computes a double integral over velocity space of
+    f(v1,xsi1) * f(v2,xsi2) * sigma(v_rel) * v_rel, discretized as four
+    nested trapezoidal sums (see the pre-refactor implementation: it looped
+    over v1, xsi1, v2, xsi2 with np.trapezoid). Nothing in that integrand
+    except f itself depends on the plasma state — the quadrature weights,
+    the spherical-coordinate jacobians, the relative velocity between grid
+    points, and the cross section sigma(v_rel) are all fixed once the
+    (v, xsi) grid is fixed. So the whole integral is bilinear in f (f
+    appears exactly twice) and can be written as a single quadratic form
+    f^T K f, where K packs in everything that doesn't depend on f. Since
+    dist_func_rz reuses the same (v, xsi) grid for every (r, z) point, K
+    only needs to be built once for the whole sweep — fusion_reactivity
+    then reduces to one matrix-vector product per distribution function
+    instead of a full 4D integral.
+
+    v, xsi must be the exact grids you will use for every subsequent call
+    to fusion_reactivity (K is only valid for the grid it was built from).
+
+    Parameters
+    ----------
+    v : 1D np.array
+        Velocity grid in m/s (pre-extension, i.e. what dist_func returns).
+    xsi : 1D np.array
+        Normalized pitch-angle grid over [0, 1] (pre-extension).
+    chunk_size : int, optional
+        Number of xsi1 (particle-1 pitch-angle) values to process per
+        iteration. Building all pairwise combinations at once would need a
+        4D temporary array of shape (n_xi, n_v, n_xi, n_v), which is too
+        large to hold in memory for a reasonably fine grid; chunking over
+        xsi1 bounds the peak memory use at the cost of a python-level loop.
+
+    Returns
+    -------
+    K : np.array
+        Symmetric (N x N) kernel matrix, N = len(xsi_ext) * len(v_ext).
+        Row/column order matches f_ext.ravel() from extend_f (xsi varies
+        slowest, v fastest), so fusion_reactivity can flatten f the same
+        way and compute f^T K f directly.
+    v_ext : np.array
+        Velocity grid extended to match xsi_ext (same length as v; kept
+        for bookkeeping/consistency checks).
+    xsi_ext : np.array
+        Pitch-angle grid extended from [0, 1] to [-1, 1] by extend_f, to
+        account for co- and counter-propagating particles.
     """
 
     # extend_f mirrors the grid geometry, not the values of f, so a
@@ -916,11 +1076,15 @@ def build_fusion_kernel(v, xsi, chunk_size=4):
 
     n_xi, n_v = len(xsi_ext), len(v_ext)
     N = n_xi * n_v
+    # Reduced mass for identical (D-D) particles [kg], used to get the
+    # center-of-mass collision energy from the relative velocity
     m_reduced = sc.constants.m_p / 2.0
 
     w_xi = _trapz_weights(xsi_ext)
-    w_v  = _trapz_weights(v_ext) * 2 * np.pi * v_ext**2   # quadrature weight * jacobian, fused
+    w_v  = _trapz_weights(v_ext) * 2 * np.pi * v_ext**2   # quadrature weight * spherical jacobian, fused
 
+    # "Particle 2" grids, broadcast so they'll pair against every particle-1
+    # grid point below (axes: xi1, v1, xi2, v2)
     xi2 = xsi_ext[np.newaxis, np.newaxis, :, np.newaxis]
     v2  = v_ext[np.newaxis, np.newaxis, np.newaxis, :]
     vpar2 = v2 * xi2
@@ -930,15 +1094,20 @@ def build_fusion_kernel(v, xsi, chunk_size=4):
 
     K = np.empty((N, N))
 
+    # Fill K one block of xsi1 rows at a time to keep the (c, n_v, n_xi, n_v)
+    # temporaries a manageable size
     for start in range(0, n_xi, chunk_size):
         stop = min(start + chunk_size, n_xi)
         c = stop - start
 
+        # "Particle 1" grids for this chunk of xsi1 values
         xi1 = xsi_ext[start:stop, np.newaxis, np.newaxis, np.newaxis]
         v1  = v_ext[np.newaxis, :, np.newaxis, np.newaxis]
         vpar1 = v1 * xi1
         vperp1_sq = v1**2 * (1 - xi1**2)
 
+        # Relative velocity between every particle-1/particle-2 grid point
+        # pair in this chunk, and the corresponding cross section
         v_rel = np.sqrt((vpar1 - vpar2)**2 + vperp1_sq + vperp2_sq)
         E_cm = 0.5 * m_reduced * v_rel**2 / sc.constants.e
         sigma = ddptFusionCXFunc(E_cm.ravel()).reshape(E_cm.shape)
@@ -946,6 +1115,9 @@ def build_fusion_kernel(v, xsi, chunk_size=4):
         w1 = (w_xi[start:stop, np.newaxis, np.newaxis, np.newaxis] *
               w_v[np.newaxis, :, np.newaxis, np.newaxis])
 
+        # Collapse (xi1_chunk, v1, xi2, v2) -> (rows, columns). Row-major
+        # reshape matches f_ext.ravel()'s (xsi, v) layout so that later
+        # f_flat @ K @ f_flat lines up index-for-index with this block.
         chunk = (w1 * w2 * v_rel * sigma).reshape(c * n_v, N)
         K[start * n_v: stop * n_v, :] = chunk
 
@@ -953,7 +1125,37 @@ def build_fusion_kernel(v, xsi, chunk_size=4):
 
 def fusion_reactivity(f, v, xsi, K, symv):
     """
-    Because the kernel has already been pre-computed, this function now just performs the final math step of calculating the reactivity.
+    Calculate fusion reactivity for a distribution function f, using the
+    kernel K precomputed by build_fusion_kernel.
+
+    Since the four nested trapezoidal integrals over velocity space reduce
+    to the quadratic form f^T K f (see build_fusion_kernel for the
+    derivation), this function no longer does any physics of its own — it
+    just extends f the same way K's grid was extended, flattens it, and
+    evaluates that quadratic form.
+
+    Parameters
+    ----------
+    f : np.array
+        Density normalized distribution function.
+        1st index - pitch angle (xsi)
+        2nd index - velocity (v)
+    v : 1D numpy array
+        Velocity grid in m/s. Must match the grid K was built from.
+    xsi : 1D numpy array
+        Normalized pitch angle over [0, 1]. Must match the grid K was
+        built from.
+    K : np.array
+        Precomputed kernel matrix from build_fusion_kernel.
+    symv : callable
+        BLAS symmetric matrix-vector multiply function (from
+        scipy.linalg.blas.get_blas_funcs), looked up once by the caller
+        and passed in so it isn't re-resolved on every call.
+
+    Returns
+    -------
+    reactivity : float
+        Fusion reactivity Gamma in 1/(m^3*s).
     """
 
     f_ext, _, _ = extend_f(f, v, xsi)
@@ -964,20 +1166,27 @@ def fusion_reactivity(f, v, xsi, K, symv):
     # the copy that BLAS would otherwise make internally.
     Kf = symv(alpha=1.0, a=K.T, x=f_flat)
 
+    # f^T K f, the discretized double integral over (v1,xsi1) and (v2,xsi2)
     return float(f_flat @ Kf)
 
 def compute_row_reactivity(i):
     """
-    Calculates the fusion reactivities for each value in the row. This is 
+    Calculates the fusion reactivities for each value in the row. This is
     purely a helper function that allows fusion_reactivity_rz to run
     things in parallel.
+
+    Reads K, the velocity/pitch-angle grids, and symv from module globals
+    set by _init_worker rather than taking them as arguments, because
+    pool.map only pickles the argument (i) for each of the zArr2D.shape[0]
+    tasks — the large shared arrays are sent to each worker process once,
+    via the Pool initializer, instead of being re-pickled for every row.
     """
 
     row = np.zeros(_f_rz.shape[1])
 
     for j in range(_f_rz.shape[1]):
-        row[j] = fusion_reactivity(f_rz[i, j], _vel_1d, _xsi_1d, _K, _symv)
-    
+        row[j] = fusion_reactivity(_f_rz[i, j], _vel_1d, _xsi_1d, _K, _symv)
+
     return i, row
 
 def fusion_reactivity_rz(vel, xsi, zArr2D, rArr2D, f_rz, makeplot=False, savename=''):
@@ -1034,6 +1243,12 @@ def fusion_reactivity_rz(vel, xsi, zArr2D, rArr2D, f_rz, makeplot=False, savenam
     _f_rz = None
     _symv = None
 
+    # Pool initializer: runs once per worker process and stashes K and the
+    # grids as module globals (see compute_row_fz's docstring for why this
+    # pattern is used). Also resolves the BLAS symv function once per
+    # worker here rather than once per (r,z) point inside
+    # compute_row_reactivity, since scipy's BLAS function lookup has its
+    # own dispatch overhead.
     def _init_worker(K, vel_1d, xsi_1d, f_rz):
         global _K, _vel_1d, _xsi_1d, _f_rz, _symv
         _K = K
@@ -1041,8 +1256,10 @@ def fusion_reactivity_rz(vel, xsi, zArr2D, rArr2D, f_rz, makeplot=False, savenam
         _xsi_1d = xsi_1d
         _f_rz = f_rz
         _symv = sc.linalg.blas.get_blas_funcs('symv', (K,))
-    
-    # Build the kernel ONCE, before any workers exist.
+
+    # Build the kernel ONCE, before any workers exist — it only depends on
+    # the (vel_1d, xsi_1d) grid, which is the same for every (r,z) point,
+    # so every worker can reuse this same K (see build_fusion_kernel).
     K, vel_1d_ext, xsi_1d_ext = build_fusion_kernel(vel_1d, xsi_1d)
 
     # Use half the lana cores to parallelize the workflow
