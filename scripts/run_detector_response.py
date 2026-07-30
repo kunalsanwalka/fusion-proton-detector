@@ -20,7 +20,7 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from detector_instrument_function import generate_detector_response
 
 global plotDir
-plotDir = '/home/sanwalka/synthetic_proton_detector/plots'
+plotDir = '/home/sanwalka/synthetic_proton_detector/plots/'
 
 def detector_geometry():
     """
@@ -61,7 +61,7 @@ def single_reactivity_response(filenameEqdsk, filenameReactivity,
 
     # Generate the detector response
     detResponse = generate_detector_response(filenameEqdsk, filenameReactivity, detPosArr, detPhiArr, detSizeArr, bendRadArr, tubeAngArr,
-                                            makeplot=makeplot, savename=savename)
+                                             makeplot=makeplot, savename=savename)
     
     return
 
@@ -108,7 +108,7 @@ if __name__ == '__main__':
     #### Generate the detector response for a single reactivity profile
     
     # 2D reactivity profile
-    filenameReactivity = '/home/sanwalka/synthetic_proton_detector/reactivity/predicted_reactivity_only_fast_ions.npz'
+    filenameReactivity = 'predicted_reactivity_only_fast_ions.npz'
 
     # eqdsk file
     filenameEqdsk = '/home/sanwalka/synthetic_proton_detector/eqdsk/wham_hts_eqdsk_for_kunal'
@@ -119,9 +119,9 @@ if __name__ == '__main__':
 
     # 2D reactivity profiles
     filenameReactivityList = [
-        '/home/sanwalka/synthetic_proton_detector/reactivity/predicted_reactivity_only_fast_ions.npz',
-        '/home/sanwalka/synthetic_proton_detector/reactivity/predicted_reactivity_only_maxwell_ions.npz',
-        '/home/sanwalka/synthetic_proton_detector/reactivity/predicted_reactivity_10percent_fast_ions.npz'
+        'predicted_reactivity_only_fast_ions.npz',
+        'predicted_reactivity_only_maxwell_ions.npz',
+        'predicted_reactivity_10percent_fast_ions.npz'
     ]
 
     labelList = [

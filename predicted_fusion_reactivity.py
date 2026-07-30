@@ -47,7 +47,7 @@ plotDir = '/home/sanwalka/synthetic_proton_detector/plots/'
 reactivityDir = '/home/sanwalka/synthetic_proton_detector/reactivity/'
 
 def dist_func(n_fast, n_max, T_max, R_m, E_NBI, theta_NBI, T_e, mu_i, Z_eff, gridsize=100, 
-              makeplot=False, savename=None):
+              makeplot=False, logplot=True, savename=None):
     """
     This function calculates the distribution function at the midplane for a
     given set of plasma parameters
@@ -78,6 +78,10 @@ def dist_func(n_fast, n_max, T_max, R_m, E_NBI, theta_NBI, T_e, mu_i, Z_eff, gri
     makeplot : boolean, optional
         Make a plot of the distribution function. 
         The default is False.
+    logplot : boolean, optional
+        If True the plot contours are log-spaced.
+        If False, the plot contours are linearly spaced.
+        The default is True.
     savename : string, optional
         Name of the file to save the plot as. 
         The default is None.
@@ -132,6 +136,7 @@ def dist_func(n_fast, n_max, T_max, R_m, E_NBI, theta_NBI, T_e, mu_i, Z_eff, gri
     fFast *= n_fast/fastDens
 
     if makeplot:
+
         # Check the integral
         integrand = 2*np.pi * fFast * (Y**2)
         fastDens = np.trapezoid(np.trapezoid(integrand, xsi, axis=0), v, axis=0) * 2
@@ -153,6 +158,7 @@ def dist_func(n_fast, n_max, T_max, R_m, E_NBI, theta_NBI, T_e, mu_i, Z_eff, gri
     fMaxwell *= n_max/maxwellDens
 
     if makeplot:
+
         # Check the integral
         integrand = 2*np.pi * fMaxwell * (Y**2)
         maxwellDens = np.trapezoid(np.trapezoid(integrand, xsi, axis=0), v, axis=0) * 2
@@ -177,30 +183,53 @@ def dist_func(n_fast, n_max, T_max, R_m, E_NBI, theta_NBI, T_e, mu_i, Z_eff, gri
         
         # Normalize first, then clip to log-safe minimum BEFORE passing to contourf
         f_norm = f / np.max(f)
-        vmin_log = 1e-6
-        f_norm = np.clip(f_norm, a_min=vmin_log, a_max=1)  # kill exact zeros
-        
-        levels = np.logspace(np.log10(vmin_log), 0, 100)   # log-spaced levels
-        
-        pltObj = ax.contourf(vPar/vNBI, vPerp/vNBI, f_norm,
-                             norm=colors.LogNorm(vmin=vmin_log, vmax=1),
-                             levels=levels,
-                             extend='neither')
-        
-        cbar = fig.colorbar(pltObj, ax=ax)
-        cbar.set_label(r'f/f$_{max}$')
-        cbar.set_ticks([1e-6, 1e-5, 1e-4, 1e-3, 1e-2, 1e-1, 1e0])
-        cbar.set_ticklabels([r'$10^{-6}$', r'$10^{-5}$', r'$10^{-4}$', r'$10^{-3}$', r'$10^{-2}$', r'$10^{-1}$', r'$10^{0}$'])
+
+        if logplot:
+            vmin_log = 1e-6
+            f_norm = np.clip(f_norm, a_min=vmin_log, a_max=1)  # kill exact zeros
+            
+            levels = np.logspace(np.log10(vmin_log), 0, 100)   # log-spaced levels
+            
+            pltObj = ax.contourf(vPar/vNBI, vPerp/vNBI, f_norm,
+                                norm=colors.LogNorm(vmin=vmin_log, vmax=1),
+                                levels=levels,
+                                extend='neither')
+            
+            cbar = fig.colorbar(pltObj, ax=ax)
+            cbar.set_label(r'f/f$_{max}$')
+            cbar.set_ticks([1e-6, 1e-5, 1e-4, 1e-3, 1e-2, 1e-1, 1e0])
+            cbar.set_ticklabels([r'$10^{-6}$', r'$10^{-5}$', r'$10^{-4}$', r'$10^{-3}$', r'$10^{-2}$', r'$10^{-1}$', r'$10^{0}$'])
+
+        else:
+            f_norm = np.clip(f_norm, a_min=0, a_max=1)
+
+            levels = np.linspace(0, 1, 100)
+
+            pltObj = ax.contourf(vPar/vNBI, vPerp/vNBI, f_norm,
+                                 levels=levels,
+                                 extend='neither')
+
+            cbar = fig.colorbar(pltObj, ax=ax)
+            cbar.set_label(r'Normalized f$(v_{||}, v_{\perp})$')
+            cbar.set_ticks([0, 0.5, 1])
+
+        # Total density
+        nTot = n_fast + n_max
+        # Exponent for the label
+        nPow = int(np.log10(nTot))
+        # Mantissa for the label
+        nMantissa = np.round(nTot / (10**nPow))
         
         # Add a text box with the plasma parameters
         textstr = '\n'.join((
             r'$E_{NBI}$ = '+str(E_NBI)+r' keV',
             r'$T_e$ = '+str(int(T_e*1e3))+r' eV',
+            r'$n_e$ = '+f'{nMantissa}'+r'$\cdot 10^{'+str(nPow)+r'}$ m$^{-3}$',
             r'$Z_{eff}$ = '+str(Z_eff),
             r'$R_m$ = '+str(R_m)))
         props = dict(boxstyle='round', facecolor='white', alpha=1)
-        ax.text(0.95, 0.95, textstr, transform=ax.transAxes, fontsize=22,
-                horizontalalignment='right', verticalalignment='top', bbox=props)
+        ax.text(0.05, 0.95, textstr, transform=ax.transAxes, fontsize=22,
+                horizontalalignment='left', verticalalignment='top', bbox=props)
         
         ax.set_aspect('equal')
         ax.set_xlabel(r'$v_{||}/v_0$')

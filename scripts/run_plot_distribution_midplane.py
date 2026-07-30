@@ -20,8 +20,8 @@ from predicted_fusion_reactivity import dist_func
 #########################################################################################
 #### HTPD 2026 Plot
 # Save a plot of the distribution function at z=0 for a 0.1keV Te case
-_, _, _ = dist_func(n_fast = 5e18,
-                    n_max = 5e19,
+_, _, _ = dist_func(n_fast = 5e19,
+                    n_max = 5,
                     T_max = 0.03,
                     R_m = 57,
                     E_NBI = 25,
@@ -31,5 +31,6 @@ _, _, _ = dist_func(n_fast = 5e18,
                     Z_eff = 3,
                     gridsize = 500,
                     makeplot = True,
-                    savename = 'dist_func_newbasis.png')
+                    logplot=False,
+                    savename = 'dist_func_htpd_withDens.png')
 #########################################################################################

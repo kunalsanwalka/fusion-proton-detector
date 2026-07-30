@@ -33,4 +33,4 @@ b_field_interpolation(filenameEqdsk)
 
 _, _, _, _, _ = volume_weights(detPos, detPhi, detSize, bendRad, tubeAng,
                                cellSize=1e-2, errorLim=None, maxParticles=500,
-                               makeplot=True, savename='volume_weights_0.7m_10deg')
+                               makeplot=True, savename='volume_weights_0.5m_10deg')

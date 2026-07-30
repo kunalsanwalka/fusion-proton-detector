@@ -21,7 +21,7 @@ from predicted_fusion_reactivity import dist_func_rz, fusion_reactivity_rz
 filenameEqdsk = '/home/sanwalka/synthetic_proton_detector/eqdsk/wham_hts_eqdsk_for_kunal'
 
 # Location to store the 2D fusion reactivity profile
-savenameReactivity = '/home/sanwalka/synthetic_proton_detector/reactivity/predicted_reactivity_only_maxwell_ions.npz'
+savenameReactivity = 'predicted_reactivity_10percent_fast_ions.npz'
 
 # Get the r-z evolved distribution functions
 rArr = np.linspace(0, 0.1, 10)
@@ -38,8 +38,8 @@ nMaxArr = nArr - nFastArr
 # Assume the maxwellian background has a temperature of 30eV
 TMaxArr = np.full(np.shape(rArr), 0.03)
 
-# Zeff is flat at 2 for simplicity
-ZeffArr = np.full(np.shape(rArr), 2)
+# Zeff is flat at 3 for simplicity
+ZeffArr = np.full(np.shape(rArr), 3)
 
 # NBI parameters are the same for all flux surfaces
 E_NBI = 25
@@ -63,7 +63,7 @@ print(f'Time taken to generate f_rz = {np.round(distFuncTime - startTime, 2)}s')
 
 # Get the r-z evolved fusion reactivity profile
 zArr2D, rArr2D, reactivity2D = fusion_reactivity_rz(vel, xsi, zArr2D, rArr2D, f_rz,
-                                                    makeplot=False,
+                                                    makeplot=True,
                                                     savename=savenameReactivity)
 reactivityTime = time.time()
 print(f'Time taken to generate the reactivity = {np.round(reactivityTime - distFuncTime, 2)}s')

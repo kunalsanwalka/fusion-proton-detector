@@ -8,7 +8,7 @@ plt.switch_backend('TkAgg')
 
 # Load the data
 dataObj = np.load('/home/sanwalka/synthetic_proton_detector/reactivity/volume_weights_test.npz')
-dataObj = np.load('/home/sanwalka/synthetic_proton_detector/reactivity/volume_weights_0.7m_10deg.npz')
+dataObj = np.load('/home/sanwalka/synthetic_proton_detector/reactivity/volume_weights_0.5m_10deg.npz')
 
 # Extract the arrays
 detPosX = dataObj['detPosX']
@@ -24,7 +24,7 @@ weights = dataObj['weights']
 distances = dataObj['distance']
 
 # Load the particle tracks
-with open('/home/sanwalka/synthetic_proton_detector/particle_tracks/track_data_0.7m_10deg.pkl', 'rb') as f:
+with open('/home/sanwalka/synthetic_proton_detector/particle_tracks/track_data_0.5m_10deg.pkl', 'rb') as f:
     xzTracks = pickle.load(f)
 
 # Set all 0 distances to a large value
@@ -52,7 +52,7 @@ weightsUniform /= np.max(weightsUniform)
 weightsUniform = np.clip(weightsUniform, 0, 1)
 
 # Plot the data
-fig = plt.figure(figsize=(9, 9), tight_layout=True)
+fig = plt.figure(figsize=(12, 9), tight_layout=True)
 ax = fig.add_subplot(111)
 ax.set_aspect('equal', adjustable='box')
 
@@ -133,12 +133,26 @@ pltObj1 = ax.contourf(XARR, YARR, weightsUniform,
 
 # Plot the particle tracks
 for i in range(len(xzTracks)):
-     track = xzTracks[i]
-     ax.plot(track[0], track[1], 
-             color='grey', 
-             linewidth=0.3,
-             alpha=0.5,
-             zorder=7)
+
+    track = xzTracks[i]
+
+    if i == 0:
+        ax.plot(track[0], track[1], 
+                color='red', 
+                linewidth=0.3,
+                alpha=1,
+                zorder=7,
+                label='Particle Tracks')
+    else:
+        ax.plot(track[0], track[1], 
+                color='red', 
+                linewidth=0.1,
+                alpha=1,
+                zorder=7)
+
+# Add a colorbar for the detector response function
+cbar = fig.colorbar(pltObj1, label=r'Normalized R($\vec{x}$)',
+                    ticks = [0, 0.5, 1])
 
 ax.legend()
 
@@ -151,6 +165,6 @@ ax.set_xlabel('X [m]')
 ax.set_ylabel('Y [m]')
 ax.set_title(f'z={np.round(detZLoc, 2)}m')
 
-plt.savefig('/home/sanwalka/synthetic_proton_detector/plots/volume_weights_0.7m_10deg.png', dpi=300)
+plt.savefig('/home/sanwalka/synthetic_proton_detector/plots/volume_weights_0.5m_10deg.png', dpi=300)
 
 plt.show()
