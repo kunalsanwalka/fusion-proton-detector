@@ -779,7 +779,7 @@ def dist_func_rz(rArr, zArr, nFastArr, nMaxArr, TMaxArr, TeArr, ZeffArr, E_NBI, 
     # Trace all flux tubes once here, before the parallel sweep, instead of
     # inside each worker (see build_flux_tube_geometry for why)
     rAlongTube_all, bNormArr_all, RmArr = build_flux_tube_geometry(rArr, zArr, Rmesh, Zmesh, Bmag, magneticFlux)
-       
+    
     # =========================================================================
     # Generate the midplane distribution functions and then evolve them along
     # zArr to get a 2D map of the distribution functions
@@ -820,51 +820,143 @@ def dist_func_rz(rArr, zArr, nFastArr, nMaxArr, TMaxArr, TeArr, ZeffArr, E_NBI, 
     
     return vel, xsi, zArr2D, rArr2D, f_rz
 
-def dist_func_rz_cql3d(filenameCQL3D):
+def load_cql3d_f(filenameCQL3D, makeplot=False, logplot=True, savename=None):
+    """
+    This function loads the distribution functions calculated at the midplane from a CQL3D output file.
 
-    vPar, vPerp, zArr2D, rArr2D, f_rz = [], [], [], [], []
+    Parameters
+    ----------
+    filenameCQL3D : str
+        filename for the CQL3D simuation output file
+    makeplot : bool, False
+        Make a plot of the data.
+        Only the innermost distribution function is plotted as a test case.
+    logplot : bool, True
+        True : Contours of the distribution function plot are in log scale
+        False: Contours are linear scale
+    savename : str, None
+        Filename to save the plot of the distribution function.
 
-    # Open the CQL3D output file
-    # with xr.open_dataset(filenameCQL3D) as ds:
+    Returns
+    -------
+    Y : np.array
+        Velocity array.
+        To get the 1D array, use Y[0,:].
+        Units - m/s
+    X : np.array
+        Normalized pitch angle array.
+        To get the 1D array, use X[:,0].
+        Units - normalized. 0 = v_perp ; 1 = v_par
+    rArr : np.array
+        Radial positions where the distribution function is computed.
+        Units : m
+    f : np.array
+        Density normalized distribution function.
+        1st index - radial position
+        2nd index - pitch angle
+        3rd index - velocity
+    """
 
+    # Open the file
+    ds = xr.open_dataset(filenameCQL3D,
+                         decode_timedelta=False)
+
+    # Distribution function [Gen. species dim x R x xdim x ydim]
+    f = ds['f'].values
+
+    # 1st set is ions. 2nd set is electrons
+    f = f[0]
+
+    # r-values at the midplane
+    # [cm] to [m]
+    solrz = ds['solrz'].values * 1e-2
+    rArr = solrz[:, 0]
+
+    # Pitch angle array (goes uniformly from 0 to pi)
+    y = ds['y'].values
+    y = y[0]
+    # Flip ordering to match output convention from egedal_f_obj
+    y = y[::-1]
+    f = f[:, :, ::-1]
+    # Go from cql3d convention of [0, pi] to egedal_f convention [-1, 1]
+    xsi = 1 - (2*y/np.pi)
+    
+    # Normalized momentum-per-mass array
+    x = ds['x'].values
+    
+    # Velocity normalization factor
+    vnorm = ds['vnorm'].values
+
+    # Velocity array in m/s
+    vel = vnorm * x / 100
+
+    # Transpose f to match indexing convention from egedal_f_obj
+    # np.ascontiguousarray makes operations on f faster later
+    f = np.ascontiguousarray(f.transpose(0, 2, 1))
+
+    # Generate 2D arrays from the 1D arrays
+    Y, X = np.meshgrid(vel, xsi)
+
+    if makeplot:
+
+        # Convert the velocity grids to vPar and vPerp for plotting
+        vPar = Y * X
+        vPerp = Y * np.sqrt(1-X**2)
+
+        fig = plt.figure(figsize=(10, 8), tight_layout=True)
+        ax = fig.add_subplot(111)
         
+        # Normalize first, then clip to log-safe minimum BEFORE passing to contourf
+        f_norm = f / np.max(f)
+        # Plot the innermost distribution function for reference
+        f_norm = f_norm[0]
 
-    return vPar, vPerp, zArr2D, rArr2D, f_rz
+        # Conver NBI energy to velocity
+        eNBI = 250 * 1e3 * sc.constants.e
+        vNBI = np.sqrt(2*eNBI / (2*sc.constants.m_p))
 
-def dist_func_rz_pleiades(filenamePleiades, filenameEqdsk):
+        if logplot:
+            vmin_log = 1e-6
+            f_norm = np.clip(f_norm, a_min=vmin_log, a_max=1)  # kill exact zeros
+            
+            levels = np.logspace(np.log10(vmin_log), 0, 100)   # log-spaced levels
+            
+            pltObj = ax.contourf(vPar/vNBI, vPerp/vNBI, f_norm,
+                                norm=colors.LogNorm(vmin=vmin_log, vmax=1),
+                                levels=levels,
+                                extend='neither')
+            
+            cbar = fig.colorbar(pltObj, ax=ax)
+            cbar.set_label(r'f/f$_{max}$')
+            cbar.set_ticks([1e-6, 1e-5, 1e-4, 1e-3, 1e-2, 1e-1, 1e0])
+            cbar.set_ticklabels([r'$10^{-6}$', r'$10^{-5}$', r'$10^{-4}$', r'$10^{-3}$', r'$10^{-2}$', r'$10^{-1}$', r'$10^{0}$'])
 
-    # =========================================================================
-    # Open the pleiades output file and extract the distribution function 
-    # parameters.
-    # =========================================================================
+        else:
+            f_norm = np.clip(f_norm, a_min=0, a_max=1)
 
-    with h5py.File(filenamePleiades, 'r') as f:
+            levels = np.linspace(0, 1, 100)
 
-        print("Keys in the file:", list(f.keys()))
+            pltObj = ax.contourf(vPar/vNBI, vPerp/vNBI, f_norm,
+                                 levels=levels,
+                                 extend='neither')
 
-        # Open the equilibrium object
-        equilObj = f['Equilibrium']
-        # Open the currents object
-        currentsObj = f['Currents']
-        # Open the diagnostics object
-        diagnosticsObj = f['Diagnostics']
-        # Open the mesh object
-        meshObj = f['Mesh']
-        # Open the vacuum fields object
-        vacuumFieldsObj = f['VacuumFields']
-        # Open the flux gridded pressure object
-        fluxGriddedPressureObj = f['FluxGriddedPressure']
+            cbar = fig.colorbar(pltObj, ax=ax)
+            cbar.set_label(r'Normalized f$(v_{||}, v_{\perp})$')
+            cbar.set_ticks([0, 0.5, 1])
 
-        print("Keys in Equilibrium object:", list(equilObj.keys()))
-        print("Keys in Currents object:", list(currentsObj.keys()))
-        print("Keys in Diagnostics object:", list(diagnosticsObj.keys()))
-        print("Keys in Mesh object:", list(meshObj.keys()))
-        print("Keys in VacuumFields object:", list(vacuumFieldsObj.keys()))
-        print("Keys in FluxGriddedPressure object:", list(fluxGriddedPressureObj.keys()))
+        ax.set_xlim(-1, 1)
+        ax.set_ylim(0, 1)
+        ax.set_aspect('equal')
+        ax.set_xlabel(r'$v_{||}/v_0$')
+        ax.set_ylabel(r'$v_{\perp}/v_0$')
+        ax.set_title(r'$f_{z=0}(v_{||}, v_{\perp})$')
+        
+        if savename is not None:
+            plt.savefig(plotDir+savename, dpi=300)
 
-    vPar, vPerp, zArr2D, rArr2D, f_rz = [], [], [], [], []
+        plt.show()
 
-    return vPar, vPerp, zArr2D, rArr2D, f_rz
+    return Y, X, rArr, f
 
 def fusion_cross_section(makeplot=False):
     """
@@ -996,8 +1088,8 @@ def extend_f(f, v, xsi, makeplot=False):
     """
 
     if makeplot:
-        # Check normalization before extension
 
+        # Check normalization before extension
         Y, _ = np.meshgrid(v, xsi)
         integrand = 2*np.pi * f * (Y**2)
         maxwellDens = np.trapezoid(np.trapezoid(integrand, xsi, axis=0), v, axis=0)
