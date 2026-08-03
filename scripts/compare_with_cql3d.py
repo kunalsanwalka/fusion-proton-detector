@@ -36,7 +36,7 @@ if __name__ == '__main__':
 
     # Get the r-z evolved fusion reactivity profile
     zArr2D, rArr2D, reactivity2D = fusion_reactivity_rz(vel, xsi, zArr2D, rArr2D, f_rz,
-                                                        makeplot=True,
+                                                        makeplot=False,
                                                         savename=savenameReactivity)
     reactivityTime = time.time()
     print(f'Time taken to generate the reactivity = {np.round(reactivityTime - distFuncTime, 2)}s')

@@ -1083,7 +1083,7 @@ def cql3d_dist_func_rz(filenameCQL3D, filenameEQDSK):
     """
 
     # Load the CQL3D midplane distribution functions
-    vel, xsi, rArr, f = load_cql3d_f(filenameCQL3D, gridsize=40)
+    vel, xsi, rArr, f = load_cql3d_f(filenameCQL3D, gridsize=30)
 
     # zArr with the innermost flux tube
     ds = xr.open_dataset(filenameCQL3D,
@@ -1317,7 +1317,7 @@ def _trapz_weights(x):
 
     return w
 
-def build_fusion_kernel(v, xsi, chunk_size=4, n_phi=32):
+def build_fusion_kernel(v, xsi, chunk_size=4, n_phi=8):
     """
     One-time precomputation of the fusion reactivity kernel matrix K.
 
