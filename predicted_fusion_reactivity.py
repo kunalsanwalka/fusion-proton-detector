@@ -816,7 +816,7 @@ def dist_func_rz(rArr, zArr, nFastArr, nMaxArr, TMaxArr, TeArr, ZeffArr, E_NBI, 
     
     return vel, xsi, zArr2D, rArr2D, f_rz
 
-def load_cql3d_f(filenameCQL3D, gridsize=50, makeplot=False, logplot=True, savename=None):
+def load_cql3d_f(filenameCQL3D, gridsize=50, eCutoff = 25e3, makeplot=False, logplot=True, savename=None):
     """
     This function loads the distribution functions calculated at the midplane from a CQL3D output file.
 
@@ -828,6 +828,10 @@ def load_cql3d_f(filenameCQL3D, gridsize=50, makeplot=False, logplot=True, saven
         Size of the velocity grid.
         The shape of f is gridsize x 2*gridsize since v_par is already calculated for both positive and negative values.
         The default is 50.
+    eCutoff : float
+        Energy (in eV) above with the distribution function is thrown away.
+        This is done to redice the size of f for later 4D integrations.
+        Default is 25keV.
     makeplot : bool, False
         Make a plot of the data.
         Only the innermost distribution function is plotted as a test case.
@@ -898,27 +902,19 @@ def load_cql3d_f(filenameCQL3D, gridsize=50, makeplot=False, logplot=True, saven
     f = np.nan_to_num(f, nan=0.0, posinf=0.0, neginf=0.0)
     f[f<=0] = 1e-5
 
-    # Convert from CQL3D to SI units
-    f *= 1e12/(vnorm**3)
-
     # Resize f and vel, xsi to be gridsize x 2*gridsize
     # We do this by simply throwing away the high energy tail where there are basically no particles.
     oldShape = f.shape
     newShape = (oldShape[0], 2*gridsize, gridsize)
 
-    print(f'old f.shape = {f.shape}')
-    print(f'old xsi.shape = {xsi.shape}')
-    print(f'old vel.shape = {vel.shape}')
+    # print(f'old f.shape = {f.shape}')
+    # print(f'old xsi.shape = {xsi.shape}')
+    # print(f'old vel.shape = {vel.shape}')
 
-    # Sum over pitch angle and normalize
-    fVsVel = f.sum(axis=(0, 1))
-    fVsVel /= fVsVel.max()
-
-    # New velocity grid is from 0 to the velocity where fVsVel drops below 1e-7
-    above = np.where(fVsVel > 1e-7)[0]
-    vCutoffIdx = above.max()
-    vMax = vel[vCutoffIdx]
-    newVel = np.linspace(vel.min(), vMax, gridsize)
+    eNBI = eCutoff * sc.constants.e
+    vNBI = np.sqrt(2*eNBI / (2*sc.constants.m_p))
+    vCutoff = vNBI * 1.1
+    newVel = np.linspace(vel.min(), vCutoff, gridsize)
 
     newXsi = np.linspace(np.min(xsi), np.max(xsi), 2*gridsize)
     newGrid = np.stack(np.meshgrid(newXsi, newVel, indexing='ij'), axis=-1)
@@ -936,14 +932,14 @@ def load_cql3d_f(filenameCQL3D, gridsize=50, makeplot=False, logplot=True, saven
     xsi = np.copy(newXsi)
     vel = np.copy(newVel)
 
-    print(f'new f.shape = {f.shape}')
-    print(f'new xsi.shape = {xsi.shape}')
-    print(f'new vel.shape = {vel.shape}')
+    # print(f'new f.shape = {f.shape}')
+    # print(f'new xsi.shape = {xsi.shape}')
+    # print(f'new vel.shape = {vel.shape}')
 
     # Generate 2D arrays from the 1D arrays
     Y, X = np.meshgrid(vel, xsi)
 
-    # Normalize to the density from the CQL3D output itself
+    #### Normalize to the density from the CQL3D output itself
 
     # Load the radial density profile from the CQL3D output [Time x R x Z x Species]
     dens = ds['densz1'].values
@@ -963,16 +959,24 @@ def load_cql3d_f(filenameCQL3D, gridsize=50, makeplot=False, logplot=True, saven
         integrand = 2 * np.pi * f[i] * (Y**2) # spherical coordinates jacobian
         densProfile[i] = np.trapezoid(np.trapezoid(integrand, xsi, axis=0), vel, axis=0)
 
-        f[i] *= dens[i] / densProfile[i]  # normalize f to the density from CQL3D
+    # Normalize f with the density from the CQL3D output
+    f *= (dens / densProfile)[:, np.newaxis, np.newaxis]
 
     if makeplot:
+
+        # Calculate the integral from f(v,xsi) to get the density profile
+        densProfile = np.zeros(len(rArr))
+        for i in range(len(rArr)):
+    
+            integrand = 2 * np.pi * f[i] * (Y**2) # spherical coordinates jacobian
+            densProfile[i] = np.trapezoid(np.trapezoid(integrand, xsi, axis=0), vel, axis=0)
 
         # Plot the radial density profiles
         fig = plt.figure(figsize=(10, 8), tight_layout=True)
         ax = fig.add_subplot(111)
 
         ax.plot(rArr, densProfile, label='From f(v,xsi)')
-        ax.plot(rArr, dens, label='From CQL3D output')
+        ax.plot(rArr, dens, linestyle='dashed', label='From CQL3D output')
 
         ax.legend()
 
@@ -994,7 +998,7 @@ def load_cql3d_f(filenameCQL3D, gridsize=50, makeplot=False, logplot=True, saven
         f_norm = f_norm[0]
 
         # Conver NBI energy to velocity
-        eNBI = 25 * 1e3 * sc.constants.e
+        eNBI = eCutoff * sc.constants.e
         vNBI = np.sqrt(2*eNBI / (2*sc.constants.m_p))
 
         if logplot:
@@ -1550,18 +1554,6 @@ def fusion_reactivity_rz(vel, xsi, zArr2D, rArr2D, f_rz, makeplot=False, savenam
 
     if makeplot == True:
         
-        # Total reaction rate for the whole plasma. 
-        # This acts as a sanity check to make sure the reactivity is calculated correctly.
-
-        # Integrate over the whole plasma volume. 
-        # We can do this by integrating over the 2D grid and multiplying by the volume element (which is 2*pi*r*dr*dz in cylindrical coordinates)
-        dr = rArr2D[1,0] - rArr2D[0,0]
-        dz = zArr2D[0,1] - zArr2D[0,0]
-
-        volumeElement = 2*np.pi*rArr2D*dr*dz
-        totalReactionRate = np.sum(reactivity2D*volumeElement)
-        print(f'Total reaction rate in the plasma: {totalReactionRate:.2e} #/s')
-
         # Interpolation function for the reactivity
         points = np.vstack((rArr2D.flatten(), zArr2D.flatten())).T
         reactivityFlat = reactivity2D.flatten()
@@ -1572,6 +1564,11 @@ def fusion_reactivity_rz(vel, xsi, zArr2D, rArr2D, f_rz, makeplot=False, savenam
         zArr = np.linspace(np.min(zArr2D), np.max(zArr2D), 200)
         RARR, ZARR = np.meshgrid(rArr, zArr)
         reactivityUniform = reactivity_interp_func(RARR.flatten(), ZARR.flatten()).reshape(RARR.shape)
+
+        # Total reaction rate for the whole plasma. This acts as a sanity check to make sure the reactivity is calculated correctly.
+        integrand = 2 * np.pi * reactivityUniform * RARR
+        totalReactionRateUniform = 2 * np.trapezoid(np.trapezoid(integrand, rArr, axis=0), zArr)
+        print(f'Proton reaction rate in the plasma (uniform grid): {totalReactionRateUniform:.2e} #/s')
 
         fig = plt.figure(figsize=(15, 6), tight_layout=True)
         ax = fig.add_subplot(111)

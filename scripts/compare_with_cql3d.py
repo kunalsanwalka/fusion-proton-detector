@@ -41,6 +41,12 @@ if __name__ == '__main__':
     reactivityTime = time.time()
     print(f'Time taken to generate the reactivity = {np.round(reactivityTime - distFuncTime, 2)}s')
 
+    fig = plt.figure(figsize=(12, 8), tight_layout=True)
+    ax = fig.add_subplot(111)
+
+    ax.scatter(zArr2D.flatten(), rArr2D.flatten())
+    plt.show()
+
     # Total fusion power for 4 different reactions
     fuspwrvt = ds['fuspwrvt'].values # W
     ddPower = fuspwrvt[2] + fuspwrvt[3]
@@ -55,10 +61,5 @@ if __name__ == '__main__':
     # Reaction rates for D + D --> n + 3He and D + D --> p + T
     nHeRate = fuspwrvt[2] / nHeEnergy # reactions/s
     pTRate = fuspwrvt[3] / pTEnergy # reactions/s
-
-    print(f'D + D --> n + 3He reaction rate = {nHeRate:.2e} reactions/s')
-    print(f'D + D --> p + T reaction rate = {pTRate:.2e} reactions/s')
-    print('Total D + D reaction rate = {:.2e} reactions/s'.format(nHeRate + pTRate))
-
-    # Axial fusion proton rate
     
+    print(f'D + D --> p + T reaction rate = {pTRate:.2e} reactions/s')
