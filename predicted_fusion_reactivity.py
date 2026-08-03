@@ -131,7 +131,7 @@ def dist_func(n_fast, n_max, T_max, R_m, E_NBI, theta_NBI, T_e, mu_i, Z_eff, gri
     fFast = fObj.f(Y, X.copy())
 
     # Normalize the fast ion distribution function to n_fast
-    integrand = 2*np.pi * fFast * (Y**2) # spherical coordinates jacobian
+    integrand = 2 * np.pi * fFast * (Y**2) # spherical coordinates jacobian
     fastDens = np.trapezoid(np.trapezoid(integrand, xsi, axis=0), v, axis=0) * 2
     fFast *= n_fast/fastDens
 
@@ -435,12 +435,8 @@ def _trace_flux_tube(rDist, zValArr, Rmesh, Zmesh, Bmag, magneticFlux, BmagInter
     bNorm = BmagInterpolator([0, rDist])[0]
     bNormArr = bMagArr / bNorm
 
-    # Mirror ratio: field strength at the throat (95% of the z-domain,
-    # since the equilibrium data can be noisy right at the grid edge)
-    # relative to the midplane
-    zThroat = np.max(Zmesh) * 0.95
-    rAtThroat = contour_interp(zThroat)
-    bMagInThroat = BmagInterpolator([zThroat, rAtThroat])[0]
+    # Mirror ratio
+    bMagInThroat = np.max(bMagArr)
     Rm = bMagInThroat / bNorm
 
     return rValArr, bNormArr, Rm
@@ -456,9 +452,9 @@ def build_flux_tube_geometry(rArr, zValArr, Rmesh, Zmesh, Bmag, magneticFlux):
     Parameters
     ----------
     rArr : np.array
-        Midplane radial positions to trace flux tubes from. [m]
+        Midplane radial positions from which to trace the flux tubes. [m]
     zValArr : np.array
-        z-positions to evaluate each flux tube at. [m]
+        z-positions at which to evaluate each flux tube. [m]
     Rmesh, Zmesh : np.array
         2D meshes of radial/axial positions from magnetic_equilibrium.
     Bmag : np.array
@@ -820,7 +816,7 @@ def dist_func_rz(rArr, zArr, nFastArr, nMaxArr, TMaxArr, TeArr, ZeffArr, E_NBI, 
     
     return vel, xsi, zArr2D, rArr2D, f_rz
 
-def load_cql3d_f(filenameCQL3D, makeplot=False, logplot=True, savename=None):
+def load_cql3d_f(filenameCQL3D, gridsize=50, makeplot=False, logplot=True, savename=None):
     """
     This function loads the distribution functions calculated at the midplane from a CQL3D output file.
 
@@ -828,6 +824,10 @@ def load_cql3d_f(filenameCQL3D, makeplot=False, logplot=True, savename=None):
     ----------
     filenameCQL3D : str
         filename for the CQL3D simuation output file
+    gridsize: int
+        Size of the velocity grid.
+        The shape of f is gridsize x 2*gridsize since v_par is already calculated for both positive and negative values.
+        The default is 50.
     makeplot : bool, False
         Make a plot of the data.
         Only the innermost distribution function is plotted as a test case.
@@ -894,10 +894,92 @@ def load_cql3d_f(filenameCQL3D, makeplot=False, logplot=True, savename=None):
     # np.ascontiguousarray makes operations on f faster later
     f = np.ascontiguousarray(f.transpose(0, 2, 1))
 
+    # Cleanup the data
+    f = np.nan_to_num(f, nan=0.0, posinf=0.0, neginf=0.0)
+    f[f<=0] = 1e-5
+
+    # Convert from CQL3D to SI units
+    f *= 1e12/(vnorm**3)
+
+    # Resize f and vel, xsi to be gridsize x 2*gridsize
+    # We do this by simply throwing away the high energy tail where there are basically no particles.
+    oldShape = f.shape
+    newShape = (oldShape[0], 2*gridsize, gridsize)
+
+    print(f'old f.shape = {f.shape}')
+    print(f'old xsi.shape = {xsi.shape}')
+    print(f'old vel.shape = {vel.shape}')
+
+    # Sum over pitch angle and normalize
+    fVsVel = f.sum(axis=(0, 1))
+    fVsVel /= fVsVel.max()
+
+    # New velocity grid is from 0 to the velocity where fVsVel drops below 1e-7
+    above = np.where(fVsVel > 1e-7)[0]
+    vCutoffIdx = above.max()
+    vMax = vel[vCutoffIdx]
+    newVel = np.linspace(vel.min(), vMax, gridsize)
+
+    newXsi = np.linspace(np.min(xsi), np.max(xsi), 2*gridsize)
+    newGrid = np.stack(np.meshgrid(newXsi, newVel, indexing='ij'), axis=-1)
+
+    newF = np.empty(newShape)
+
+    for i in range(oldShape[0]):
+
+        interp = sc.interpolate.RegularGridInterpolator((xsi, vel), f[i], 
+                                                        bounds_error=False, 
+                                                        fill_value=0)
+        newF[i] = interp(newGrid)
+
+    f = np.copy(newF)
+    xsi = np.copy(newXsi)
+    vel = np.copy(newVel)
+
+    print(f'new f.shape = {f.shape}')
+    print(f'new xsi.shape = {xsi.shape}')
+    print(f'new vel.shape = {vel.shape}')
+
     # Generate 2D arrays from the 1D arrays
     Y, X = np.meshgrid(vel, xsi)
 
+    # Normalize to the density from the CQL3D output itself
+
+    # Load the radial density profile from the CQL3D output [Time x R x Z x Species]
+    dens = ds['densz1'].values
+    # [cm^-3] to [m^-3]
+    dens *= 1e6
+    # 1st one is ions, the 2nd is electrons.
+    dens = dens[:, :, :, 0]
+    # Pick the last timestep
+    dens = dens[-1, :, :]
+    # Get the radial profile at the midplane (z=0)
+    dens = dens[:, 0]
+
+    # Calculate the integral from f(v,xsi) to get the density profile
+    densProfile = np.zeros(len(rArr))
+    for i in range(len(rArr)):
+
+        integrand = 2 * np.pi * f[i] * (Y**2) # spherical coordinates jacobian
+        densProfile[i] = np.trapezoid(np.trapezoid(integrand, xsi, axis=0), vel, axis=0)
+
+        f[i] *= dens[i] / densProfile[i]  # normalize f to the density from CQL3D
+
     if makeplot:
+
+        # Plot the radial density profiles
+        fig = plt.figure(figsize=(10, 8), tight_layout=True)
+        ax = fig.add_subplot(111)
+
+        ax.plot(rArr, densProfile, label='From f(v,xsi)')
+        ax.plot(rArr, dens, label='From CQL3D output')
+
+        ax.legend()
+
+        ax.set_xlabel('R [m]')
+        ax.set_ylabel('Normalized Density')
+
+        plt.show()
 
         # Convert the velocity grids to vPar and vPerp for plotting
         vPar = Y * X
@@ -912,7 +994,7 @@ def load_cql3d_f(filenameCQL3D, makeplot=False, logplot=True, savename=None):
         f_norm = f_norm[0]
 
         # Conver NBI energy to velocity
-        eNBI = 250 * 1e3 * sc.constants.e
+        eNBI = 25 * 1e3 * sc.constants.e
         vNBI = np.sqrt(2*eNBI / (2*sc.constants.m_p))
 
         if logplot:
@@ -957,6 +1039,72 @@ def load_cql3d_f(filenameCQL3D, makeplot=False, logplot=True, savename=None):
         plt.show()
 
     return Y, X, rArr, f
+
+def cql3d_dist_func_rz(filenameCQL3D, filenameEQDSK):
+    """
+    Generate the distribution function at each (r,z) point from a given CQL3D output and corresponsing and EQDSK file.
+
+    Parameters
+    ----------
+    filenameCQL3D : str
+        Filename for the CQL3D output file.
+    filenameEQDSK: str
+        Filename for the EQDSK file.
+
+    Returns
+    -------
+    vel : np.array
+        velocity array. [m/s]
+    xsi : np.array
+        normalized pitch angle array. [m/s]
+    zArr2D : np.array
+        z-locations where the f has been calculated. [meters]
+    rAlongTube_all : np.array
+        r-locations where the f has been calculated. [meters].
+    f_rz : np.array
+        Distribution function at all points in the plasma.
+        This is a 4D array with the following index convention-
+        1st index - r-position
+        2nd index - z-position
+        3rd index - v
+        4th index - xsi
+    """
+
+    # Load the CQL3D midplane distribution functions
+    vel, xsi, rArr, f = load_cql3d_f(filenameCQL3D)
+
+    # zArr with the innermost flux tube
+    ds = xr.open_dataset(filenameCQL3D,
+                        decode_timedelta=False)
+
+    # Solution grid for the cql3d simulation
+    # Drop the last point. It is in the expander anyway so it does not matter
+    solzz = ds['solzz'].values / 100
+    zArr = solzz[0, :-1]
+
+    # Load the magnetic equilibrium
+    Rmesh, Zmesh, Br, Bz, Bmag, magneticFlux = magnetic_equilibrium(filenameEQDSK)
+
+    # Trace all flux tubes once here, before the parallel sweep, instead of
+    # inside each worker (see build_flux_tube_geometry for why)
+    rAlongTube_all, bNormArr_all, RmArr = build_flux_tube_geometry(rArr, zArr, Rmesh, Zmesh, Bmag, magneticFlux)
+
+    # Throw out all points in the expander
+    maxZidx = np.where(bNormArr_all == np.max(bNormArr_all))[1][0]
+    rAlongTube_all = rAlongTube_all[:, :maxZidx]
+    bNormArr_all = bNormArr_all[:, :maxZidx]
+    zArr = zArr[:maxZidx]
+
+    # Make the z-array also 2D to make the analysis easier
+    zArr2D = np.tile(zArr, (len(rArr), 1))
+
+    # Array to store the (r, z) evolved distribution function
+    f_rz = np.zeros(shape=(len(rArr), len(zArr), len(xsi[:,0]), len(vel[0, :])))
+
+    for i in range(len(rArr)):
+        f_rz[i] = dist_func_z_evol(f[i], vel, xsi, bNormArr_all[i])
+
+    return vel, xsi, zArr2D, rAlongTube_all, f_rz
 
 def fusion_cross_section(makeplot=False):
     """
