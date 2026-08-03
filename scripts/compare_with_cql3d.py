@@ -59,7 +59,10 @@ if __name__ == '__main__':
     pTEnergy *= 1e6 * sc.constants.e # J
 
     # Reaction rates for D + D --> n + 3He and D + D --> p + T
-    nHeRate = fuspwrvt[2] / nHeEnergy # reactions/s
-    pTRate = fuspwrvt[3] / pTEnergy # reactions/s
+    # fuspwrvt indexing (verified against the CQL3D source, sigsetup.f):
+    # 0 = D+T->a+n, 1 = D+He3->a+p, 2 = D+D->T+p, 3 = D+D->He3+n.
+    # This is the reverse of what was previously assumed here.
+    nHeRate = fuspwrvt[3] / nHeEnergy # reactions/s
+    pTRate = fuspwrvt[2] / pTEnergy # reactions/s
     
     print(f'D + D --> p + T reaction rate = {pTRate:.2e} reactions/s')
