@@ -1225,7 +1225,11 @@ def extend_f(f, v, xsi, makeplot=False):
         Velocity grid in m/s
     xsi : 1D numpy array
         Normalized pitch angle.
-        Domain must be from [0, 1]
+        Domain must be from [0, 1]. If xsi already spans negative values
+        (e.g. distributions loaded via load_cql3d_f, whose pitch-angle grid
+        already covers the full [-1, 1] range including counter-streaming
+        particles), the grid is already extended and this function is a
+        no-op — mirroring it again would double the domain and corrupt it.
 
     Returns
     -------
@@ -1233,11 +1237,16 @@ def extend_f(f, v, xsi, makeplot=False):
         Density normalized distribution function.
         1st index - pitch angle (xsi)
         2nd index - velocity (v)
-    v : 1D numpy array  
+    v : 1D numpy array
         Velocity grid in m/s
     xsi : 1D numpy array
         Normalized pitch angle. Now extended to [-1, 1]
     """
+
+    if xsi.min() < 0:
+        # Already spans the full [-1, 1] pitch-angle range, so there are no
+        # counter-propagating particles left to add.
+        return f, v, xsi
 
     if makeplot:
 
@@ -1319,6 +1328,12 @@ def build_fusion_kernel(v, xsi, chunk_size=4):
     then reduces to one matrix-vector product per distribution function
     instead of a full 4D integral.
 
+    K includes a factor of 1/2 to account for D-D being a reaction between
+    identical particles: the unrestricted double integral over (v1,xsi1)
+    and (v2,xsi2) counts every unordered pair of particles twice (once as
+    particle-1=A/particle-2=B and once as particle-1=B/particle-2=A), so
+    without this factor the reaction rate would be overcounted by 2x.
+
     v, xsi must be the exact grids you will use for every subsequent call
     to fusion_reactivity (K is only valid for the grid it was built from).
 
@@ -1358,8 +1373,9 @@ def build_fusion_kernel(v, xsi, chunk_size=4):
     n_xi, n_v = len(xsi_ext), len(v_ext)
     N = n_xi * n_v
     # Reduced mass for identical (D-D) particles [kg], used to get the
-    # center-of-mass collision energy from the relative velocity
-    m_reduced = sc.constants.m_p / 2.0
+    # center-of-mass collision energy from the relative velocity. Deuteron
+    # mass is taken as 2*m_p so mu = m_D/2 = (2*m_p)/2 = m_p.
+    m_reduced = sc.constants.m_p
 
     w_xi = _trapz_weights(xsi_ext)
     w_v  = _trapz_weights(v_ext) * 2 * np.pi * v_ext**2   # quadrature weight * spherical jacobian, fused
@@ -1370,8 +1386,11 @@ def build_fusion_kernel(v, xsi, chunk_size=4):
     v2  = v_ext[np.newaxis, np.newaxis, np.newaxis, :]
     vpar2 = v2 * xi2
     vperp2_sq = v2**2 * (1 - xi2**2)
+    # The 1/2 folded in here is the identical-particle correction described
+    # above; putting it on w2 (built once, outside the chunk loop) applies
+    # it to every entry of K without an extra O(N^2) pass at the end.
     w2 = (w_xi[np.newaxis, np.newaxis, :, np.newaxis] *
-          w_v[np.newaxis, np.newaxis, np.newaxis, :])
+          w_v[np.newaxis, np.newaxis, np.newaxis, :]) * 0.5
 
     K = np.empty((N, N))
 
