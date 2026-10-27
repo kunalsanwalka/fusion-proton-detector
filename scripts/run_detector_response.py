@@ -27,12 +27,12 @@ def detector_geometry():
     Define the detector geometry (positions, angles, sizes, bend radii and tube angles)
     """
 
-    file = np.load('/home/sanwalka/synthetic_proton_detector/data/optimal_angles_5cm_spacing.npz')
+    file = np.load('/home/sanwalka/synthetic_proton_detector/data/optimal_angles_whamr_cdr.npz')
 
     # (x,y,z) positions. These are mounted on the CC inner wall.
     zPosArr = file['zPosArr'] # meters
-    xPos = -0.257
-    yPos = 0.307
+    xPos = -25.905 * 1e-2
+    yPos = -0.235 * 1e-2
     detPosArr = np.array([[xPos, yPos, zPos] for zPos in zPosArr]) # meters
 
     # Detector angles (after optimization)
@@ -108,27 +108,28 @@ if __name__ == '__main__':
     #### Generate the detector response for a single reactivity profile
     
     # 2D reactivity profile
-    filenameReactivity = 'predicted_reactivity_only_fast_ions.npz'
+    filenameReactivity = 'predicted_reactivity_whamr_cdr.npz'
 
     # eqdsk file
     filenameEqdsk = '/home/sanwalka/synthetic_proton_detector/eqdsk/wham_hts_eqdsk_for_kunal'
+    filenameEqdsk = '/mnt/n/whamdata/sanwalka/ips_runs/findGasBoxDensity/nneut_1e15_gb_1e18_NBI_800kW_ECH_0kW/simulation_results/9.000/components/eq__pleiades_3/eqdsk'
 
-    single_reactivity_response(filenameEqdsk, filenameReactivity, makeplot=True, savename='detector_response_with_only_fast_ions.npz')
+    single_reactivity_response(filenameEqdsk, filenameReactivity, makeplot=True, savename='detector_response_whamr_cdr.npz')
 
     #### Compare the detector response for different reactivity profiles
 
-    # 2D reactivity profiles
-    filenameReactivityList = [
-        'predicted_reactivity_only_fast_ions.npz',
-        'predicted_reactivity_only_maxwell_ions.npz',
-        'predicted_reactivity_10percent_fast_ions.npz'
-    ]
+    # # 2D reactivity profiles
+    # filenameReactivityList = [
+    #     'predicted_reactivity_only_fast_ions.npz',
+    #     'predicted_reactivity_only_maxwell_ions.npz',
+    #     'predicted_reactivity_10percent_fast_ions.npz'
+    # ]
 
-    labelList = [
-        'Fast only',
-        'Maxwellian only',
-        'Fast + Maxwellian'
-    ]
+    # labelList = [
+    #     'Fast only',
+    #     'Maxwellian only',
+    #     'Fast + Maxwellian'
+    # ]
 
-    compare_reactivity_responses(filenameEqdsk, filenameReactivityList, labelList,
-                                 makeplot=True, savename='detector_response_comparison.png')
+    # compare_reactivity_responses(filenameEqdsk, filenameReactivityList, labelList,
+    #                              makeplot=True, savename='detector_response_comparison.png')

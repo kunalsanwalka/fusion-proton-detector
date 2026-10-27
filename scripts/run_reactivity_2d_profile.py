@@ -19,17 +19,22 @@ from predicted_fusion_reactivity import dist_func_rz, fusion_reactivity_rz
 
 # Location of magnetic equilibrium file
 filenameEqdsk = '/home/sanwalka/synthetic_proton_detector/eqdsk/wham_hts_eqdsk_for_kunal'
+filenameEqdsk= '/mnt/n/whamdata/sanwalka/ips_runs/findGasBoxDensity/nneut_1e15_gb_1e18_NBI_800kW_ECH_0kW/simulation_results/9.000/components/eq__pleiades_3/eqdsk'
 
 # Location to store the 2D fusion reactivity profile
-savenameReactivity = 'predicted_reactivity_10percent_fast_ions.npz'
+savenameReactivity = 'predicted_reactivity_whamr_cdr.npz'
 
 # Get the r-z evolved distribution functions
-rArr = np.linspace(0, 0.1, 10)
+rArr = np.linspace(0, 0.16, 10)
 zArr = np.linspace(0, 0.8, 50)
 
 # Use density and temperature profiles from Keisuke's paper.
 nArr = 5e19 - 3e20*rArr
 TeArr = 75 - (80*rArr)**2
+
+# Flat density and temperature profiles from the latest WHAM-R results
+nArr = np.full_like(rArr, 2e19)
+TeArr = np.full_like(rArr, 30)
 
 # Fast ion component is 1/10 the maxwellian background
 nFastArr = nArr/10

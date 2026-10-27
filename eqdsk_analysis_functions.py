@@ -30,7 +30,11 @@ def parseArgs():
 
     parser = argparse.ArgumentParser()
 
+    # Name of the eqdsk file being parsed
     parser.add_argument('-filename', type=str)
+
+    # Location where we want the .npz file saved
+    parser.add_argument('-savename', type=str, default=None)
 
     args = parser.parse_args()
 
@@ -1121,6 +1125,7 @@ if __name__ == '__main__':
     # eqdsk filename from the terminal
     args = parseArgs()
     filenameEqdsk = args.filename
+    savename = args.savename
 
     # Field values
     Rmesh, Zmesh, Br, Bz, Bmag = magnetic_field_RZ(filenameEqdsk)
@@ -1132,12 +1137,13 @@ if __name__ == '__main__':
     eqDict = read_eqdsk(filenameEqdsk)
 
     # Save them in a .npz file
-    np.savez('filenameEqdsk'+'.npz',
-             Rmesh = Rmesh,
-             Zmesh = Zmesh,
-             Br = Br,
-             Bz = Bz,
-             Bmag = Bmag,
-             magneticFlux = magneticFlux,
-             psilim = eqDict['psi_lim'],
-             eqDict = eqDict)
+    if savename != None:
+        np.savez(savename+'.npz',
+                Rmesh = Rmesh,
+                Zmesh = Zmesh,
+                Br = Br,
+                Bz = Bz,
+                Bmag = Bmag,
+                magneticFlux = magneticFlux,
+                psilim = eqDict['psi_lim'],
+                eqDict = eqDict)

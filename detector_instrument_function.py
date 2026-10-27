@@ -766,23 +766,26 @@ def generate_tracks_aperture(detPos, detPhi, detSize, bendRad, tubeAng,
         
         plt.rcParams.update({'font.size': 32})
 
-        #Relative sizes of each plot
-        relSize=dict(width_ratios=[1.5,1],height_ratios=[1,1])
+        # Relative sizes of each plot
+        relSize = dict(width_ratios=[1.5,1],height_ratios=[1,1])
 
-        detectorLoc=detPos
-        detectorVec=detNorm
-        detectorArea=detSize
+        detectorLoc = detPos
+        detectorVec = detNorm
+        detectorArea = detSize
 
-        fig,axs=plt.subplot_mosaic([['upper left','right'],['lower left','right']],gridspec_kw=relSize,figsize=(28,11),constrained_layout=True)
+        fig, axs = plt.subplot_mosaic([['upper left','right'],['lower left','right']],
+                                      gridspec_kw = relSize,
+                                      figsize=(28,11),
+                                      constrained_layout = True)
 
-        #Go over each subplot
+        # Go over each subplot
         for label,ax in axs.items():
             
-            #XZ plot
-            if label=='lower left':
+            # XZ plot
+            if label == 'lower left':
                  
-                #Plot each ray
-                if len(openingTracks)!=0:
+                # Plot each ray
+                if len(openingTracks) != 0:
                     for i in range(len(openingTracks)):
                         
                         ax.plot(openingTracks[i][2],openingTracks[i][0],color='red')
@@ -1005,43 +1008,43 @@ def generate_tracks_aperture(detPos, detPhi, detSize, bendRad, tubeAng,
                 # ax.legend()
                 ax.grid(True)
 
-            #XY plot
-            if label=='right':
+            # XY plot
+            if label == 'right':
                 
-                #Plot each ray
-                if len(openingTracks)!=0:
+                # Plot each ray
+                if len(openingTracks) != 0:
                     for i in range(len(openingTracks)):
                         
-                        ax.plot(openingTracks[i][0],openingTracks[i][1],color='red')
+                        ax.plot(openingTracks[i][0], openingTracks[i][1], color='red')
                     
-                        #Plot the endpoints
-                        #Only add label to 1 track
+                        # Plot the endpoints
+                        # Only add label to 1 track
                         if i==1:
-                            ax.scatter(openingTracks[i][0][-1],openingTracks[i][1][-1],zorder=5,color='blue',label='End Point')
+                            ax.scatter(openingTracks[i][0][-1], openingTracks[i][1][-1], zorder=5,color='blue',label='End Point')
                         else:
                             ax.scatter(openingTracks[i][0][-1],openingTracks[i][1][-1],zorder=5,color='blue')
-                        #Plot the startpoints
-                        #Only add label to 1 track
+                        # Plot the startpoints
+                        # Only add label to 1 track
                         if i==1:
                             ax.scatter(openingTracks[i][0][0],openingTracks[i][1][0],s=75,zorder=5,color='black',label='Start Point')
                         else:
                             ax.scatter(openingTracks[i][0][0],openingTracks[i][1][0],s=75,zorder=5,color='black')
                 
-                #Plot the r=10cm circle
-                #Create the circle object
-                circ=plt.Circle((0,0),  #Center
-                          0.1,          #Radius in m
-                          color='g',    #Color
-                          linewidth=5,  #Line width
-                          fill=False)   #Only make an outline
-                #Add to the plot
+                # Plot the r=10cm circle
+                # Create the circle object
+                circ=plt.Circle((0,0),  # Center
+                          0.1,          # Radius in m
+                          color='g',    # Color
+                          linewidth=5,  # Line width
+                          fill=False)   # Only make an outline
+                # Add to the plot
                 ax.add_patch(circ)
                 
-                #Plot the detector
+                # Plot the detector
                 if type(detectorLoc)!=int:
                     
-                    #Detector normal
-                    ax.quiver(detectorLoc[0],detectorLoc[1],detectorVec[0],detectorVec[1],width=3e-3,zorder=10)
+                    # Detector normal
+                    ax.quiver(detectorLoc[0],detectorLoc[1],-detectorVec[0],detectorVec[1],width=3e-3,zorder=10)
                     # ax.quiverkey(detNormalObj,0.9,0.9,1,label='Detector Normal',labelpos='E')
                     
                     #Detector boundary
@@ -1068,7 +1071,7 @@ def generate_tracks_aperture(detPos, detPhi, detSize, bendRad, tubeAng,
                 if type(adjustedPos)!=int:
                     
                     #Detector normal
-                    ax.quiver(adjustedPos[0],adjustedPos[1],openNorm[0],openNorm[1],width=3e-3,zorder=10)
+                    ax.quiver(adjustedPos[0],adjustedPos[1],-openNorm[0],openNorm[1],width=3e-3,zorder=10)
                     # ax.quiverkey(detNormalObj,0.9,0.9,1,label='Detector Normal',labelpos='E')
                     
                     #Detector boundary
@@ -1098,7 +1101,7 @@ def generate_tracks_aperture(detPos, detPhi, detSize, bendRad, tubeAng,
                 ax.set_title('XY Plane')
                 
                 #Zoom in to make plots clearer
-                ax.set_xlim(-0.4,0.4)
+                ax.set_xlim(0.4,-0.4)
                 ax.set_ylim(-0.4,0.4)
                 
                 ax.legend()
@@ -1313,6 +1316,8 @@ def volume_weights(detPos, detPhi, detSize, bendRad, tubeAng,
     # number of particles is reached
     i = 0 # Track number of iterations through the loop
 
+    print(detPos, detPhi, detSize, bendRad, tubeAng)
+
     while True:
 
         # If errorLim is None, then we only stop when maxParticles is reached
@@ -1336,8 +1341,7 @@ def volume_weights(detPos, detPhi, detSize, bendRad, tubeAng,
                                                  bendRad=bendRad,
                                                  tubeAng=tubeAng,
                                                  numLaunchPos=5,
-                                                 numLaunchesPerPos=5,
-                                                 makeplot=False)
+                                                 numLaunchesPerPos=5)
 
         tracksGenerationTime = time.time()
         # print(f'Time taken to generate tracks= {tracksGenerationTime - startTime}s')
@@ -1779,7 +1783,8 @@ def b_field_interpolation(filenameEqdsk):
     eqdskScriptPath = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'eqdsk_analysis_functions.py')
     subprocess.run(['/share/envs/pleiades_env/bin/python',
                     eqdskScriptPath,
-                    '-filename', filenameEqdsk], check=True)
+                    '-filename', filenameEqdsk,
+                    '-savename', 'filenameEqdsk'], check=True)
 
     # Load the data from the .npz file made by this function
     npzFilename = np.load('filenameEqdsk'+'.npz', allow_pickle=True)
@@ -1935,7 +1940,7 @@ def detector_angle_optimization(detPos, detSize, bendRad, tubeAng, filenameEqdsk
     """
 
     # Angle array
-    angleArr = np.arange(250, 310, 2)
+    angleArr = np.arange(150, 180, 2)
     angleArrRad = (np.pi/180) * angleArr
     # Impact parameter array
     minImpactParams = np.zeros_like(angleArr, dtype=float)
@@ -1950,7 +1955,9 @@ def detector_angle_optimization(detPos, detSize, bendRad, tubeAng, filenameEqdsk
                                               detPhi = angleArrRad[i], 
                                               detSize = detSize, 
                                               bendRad = bendRad, 
-                                              tubeAng = tubeAng)
+                                              tubeAng = tubeAng,
+                                              numLaunchPos = 40,
+                                              numLaunchesPerPos = 40)
 
         # Go over each track and get the impact parameter
         impactParams = np.zeros(shape=len(currTracks))
