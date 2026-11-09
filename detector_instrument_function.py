@@ -1224,7 +1224,7 @@ def _track_grid_hits(track, x0, y0, z0, cellSize, zSpacing, Nx, Ny, Nz):
 
 def volume_weights(detPos, detPhi, detSize, bendRad, tubeAng,
                    cellSize=1e-2, errorLim=1e-2, minParticles=50, maxParticles=200,
-                   makeplot=False, savename=None):
+                   maxIterations=1000, makeplot=False, savename=None):
     """
     This function calculates the instrument function for a given detector 
     geometry. It also calculates the distance between the detector aperture and 
@@ -1262,6 +1262,13 @@ def volume_weights(detPos, detPhi, detSize, bendRad, tubeAng,
         Maximum number of particles to be launched by the simulation before it
         exits.
         The default is 200.
+    maxIterations : int, optional
+        Maximum number of loop iterations before the simulation exits,
+        regardless of the error or the number of particles. Each iteration
+        nominally gets ~20 particles through the aperture and takes ~0.01s, so
+        this only stops detectors that see little or nothing of the plasma
+        (e.g. one pointed away from it), which would otherwise loop forever.
+        The default is 1000.
     makeplot : boolean, optional
         Make a plot of the data. Default is False.
     savename : string, optional
@@ -1274,6 +1281,7 @@ def volume_weights(detPos, detPhi, detSize, bendRad, tubeAng,
         '1D' array where each element is the 3 coordinates of that mesh point.
     volumeWeights : np.array
         Corresponding detector weight sensitivity.
+        All zeros if no particle made it through the aperture.
     volumeDistances : np.array
         Distances from the aperture/collimation opening to the voxel.
         If no particle hits the detector, this is set to 0.
@@ -1329,6 +1337,14 @@ def volume_weights(detPos, detPhi, detSize, bendRad, tubeAng,
         if not keepGoing:
             break
 
+        # Stop detectors that see little or nothing of the plasma, since
+        # totParticles only grows when particles make it through the aperture
+        if i >= maxIterations:
+            print(f'WARNING: Stopped after maxIterations = {maxIterations} with only '
+                  f'{totParticles[-1]} particles through the aperture. '
+                  f'Check that the detector is pointed at the plasma.')
+            break
+
         startTime = time.time()
 
         # Old volume weights to track error
@@ -1375,7 +1391,9 @@ def volume_weights(detPos, detPhi, detSize, bendRad, tubeAng,
     print(f'Total number of particles launched = {totParticles[-1]}')
         
     # Normalize the volume weights
-    volumeWeights /= np.max(volumeWeights)
+    # If no particle made it through the aperture, the weights are left as zeros
+    if np.max(volumeWeights) > 0:
+        volumeWeights /= np.max(volumeWeights)
     
     if makeplot == True:
         
@@ -1826,6 +1844,49 @@ def compute_row_detector(i, filenameReactivity, detPosArr, detPhiArr, detSizeArr
     
     return i, detResponse
 
+def load_detector_geometry(geometryFile):
+    """
+    Load the detector geometry from the .npz saved by
+    scripts/run_angle_optimization.py, so that the optimal angles are always
+    used with the same geometry they were optimized for.
+
+    Parameters
+    ----------
+    geometryFile : str
+        Location of the .npz with the detector geometry.
+
+    Returns
+    -------
+    detPosArr : np.array
+        2D array with the positions of the center of the detectors. [m]
+        1st index - Detector number
+        2nd index - [x, y, z]
+    detPhiArr : np.array
+        Angle the detector makes with the x-axis in the XY plane. [radians]
+    detSizeArr : np.array
+        Size of the detector (assume circular shape). [m^2]
+    bendRadArr : np.array
+        Bend radius of the collimating tube. [m]
+    tubeAngArr : np.array
+        Angle subtended by the collimating tube. [radians]
+    """
+
+    file = np.load(geometryFile)
+
+    requiredKeys = ['detPosArr', 'optimalAngleArr', 'detSizeArr', 'bendRadArr', 'tubeAngArr']
+    missingKeys = [key for key in requiredKeys if key not in file]
+    if missingKeys:
+        raise KeyError(f'{geometryFile} is missing {missingKeys}. '
+                       f'Re-run scripts/run_angle_optimization.py to save the full detector geometry.')
+
+    detPosArr = file['detPosArr'] # meters
+    detPhiArr = file['optimalAngleArr'] * (np.pi/180) # radians
+    detSizeArr = file['detSizeArr'] # m^2
+    bendRadArr = file['bendRadArr'] # meters
+    tubeAngArr = file['tubeAngArr'] # radians
+
+    return detPosArr, detPhiArr, detSizeArr, bendRadArr, tubeAngArr
+
 def generate_detector_response(filenameEqdsk, filenameReactivity,
                                detPosArr, detPhiArr, detSizeArr, bendRadArr, tubeAngArr, makeplot=False, savename=None):
     """
@@ -1940,7 +2001,7 @@ def detector_angle_optimization(detPos, detSize, bendRad, tubeAng, filenameEqdsk
     """
 
     # Angle array
-    angleArr = np.arange(150, 180, 2)
+    angleArr = np.arange(60, 90, 2)
     angleArrRad = (np.pi/180) * angleArr
     # Impact parameter array
     minImpactParams = np.zeros_like(angleArr, dtype=float)

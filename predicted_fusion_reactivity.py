@@ -1671,25 +1671,29 @@ def fusion_reactivity_rz(vel, xsi, zArr2D, rArr2D, f_rz, makeplot=False, savenam
         cmap.set_bad(cmap(0))
         cmap.set_under(cmap(0))
 
+        # Plot the reactivity contour
         pltObj = ax.contourf(ZARR, RARR, reactivityUniform, levels=100, cmap='inferno')
-        # Add the other 4 quadrants by symmetry
-        ax.contourf(-ZARR, RARR, reactivityUniform, levels=100, cmap='inferno')
-        ax.contourf(ZARR, -RARR, reactivityUniform, levels=100, cmap='inferno')
-        ax.contourf(-ZARR, -RARR, reactivityUniform, levels=100, cmap='inferno')
 
         # Also add the limiter flux surface
-        ax.plot(zArr2D[-1], rArr2D[-1], color='white', label=r'$\Psi_{lim}$', linewidth=4)
-        ax.plot(-zArr2D[-1], rArr2D[-1], color='white', linewidth=4)
-        ax.plot(zArr2D[-1], -rArr2D[-1], color='white', linewidth=4)
-        ax.plot(-zArr2D[-1], -rArr2D[-1], color='white', linewidth=4)
+        ax.plot(zArr2D[-1], rArr2D[-1], color='grey', label=r'$\Psi_{lim}$', linewidth=4)
 
-        # ax.set_aspect('equal')
         ax.set_xlabel('Z [m]')
         ax.set_ylabel('R[m]')
 
+        ax.set_xlim(0, np.max(zArr2D[-1]))
+        ax.set_ylim(0, np.max(rArr2D[-1]))
+        ax.set_aspect('equal')
+
         ax.legend(loc='upper right')
 
-        cbar = fig.colorbar(pltObj, label=r'Reactivity [#/(m$^3$s)]')
+        # Scale the colorbar tick labels by a power of ten and put that power in the label
+        import matplotlib.ticker as mticker
+        exponent = int(np.floor(np.log10(pltObj.norm.vmax)))
+        cbar = fig.colorbar(pltObj, ax=ax, orientation='horizontal', location='bottom', pad=0.2, fraction=0.08,
+                            label=rf'Reactivity [10$^{{{exponent}}}$ #/(m$^3$s)]')
+        cbar.locator = mticker.MaxNLocator(nbins=5, steps=[1, 2, 4, 5, 10], integer=False)
+        cbar.formatter = mticker.FuncFormatter(lambda x, pos: f'{round(x / 10**exponent, 6):g}')
+        cbar.update_ticks()
 
         if savefigname != '':
             plt.savefig(plotDir+savefigname, dpi=300)

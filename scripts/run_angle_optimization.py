@@ -22,6 +22,7 @@ filenameEqdsk = '/mnt/n/whamdata/sanwalka/ips_runs/findGasBoxDensity/nneut_1e15_
 
 # Actual (XYZ) location of the detector
 detPos = np.array([-25.905, -0.235, 42.6]) * 1e-2
+detPos = np.array([0, -342.9, 232.8]) * 1e-3
 
 detRad = 0.5 # inches
 detSize = (np.pi*detRad*detRad) / 1550
@@ -35,10 +36,11 @@ optimalAngle = detector_angle_optimization(detPos, detSize, bendRad, tubeAng, fi
 # %% Find the optimal angle for all of the detectors
 
 filenameEqdsk = '/home/sanwalka/synthetic_proton_detector/eqdsk/wham_hts_eqdsk_for_kunal'
-filenameEqdsk = '/mnt/n/whamdata/sanwalka/ips_runs/findGasBoxDensity/nneut_1e15_gb_1e18_NBI_800kW_ECH_0kW/simulation_results/9.000/components/eq__pleiades_3/eqdsk'
+# filenameEqdsk = '/mnt/n/whamdata/sanwalka/ips_runs/findGasBoxDensity/nneut_1e15_gb_1e18_NBI_800kW_ECH_0kW/simulation_results/9.000/components/eq__pleiades_3/eqdsk'
 
 savename = '/home/sanwalka/synthetic_proton_detector/data/optimal_angles_5cm_spacing.npz'
 savename = '/home/sanwalka/synthetic_proton_detector/data/optimal_angles_5cm_spacing_whamr.npz'
+savename = '/home/sanwalka/synthetic_proton_detector/data/optimal_angles_5cm_spacing_whamhts.npz'
 # savename = '/home/sanwalka/synthetic_proton_detector/data/optimal_angles_whamr_cdr.npz'
 
 # Positions of the detectors for the SW 12in CF flange
@@ -49,13 +51,13 @@ savename = '/home/sanwalka/synthetic_proton_detector/data/optimal_angles_5cm_spa
 
 # Possible positions for the future array
 zDelta = 0.05 # 5cm apart
-zPosArr = np.arange(0.3, 0.65, zDelta)
-xPos = 398 * 1e-3
-yPos = -12 * 1e-3
+zPosArr = np.arange(0.23, 0.62, zDelta)
+xPos = 0 * 1e-3
+yPos = -342.9 * 1e-3
 
 detPosArr = np.array([[xPos, yPos, zPos] for zPos in zPosArr]) # meters
 
-detRad = 1.0 # inches
+detRad = 0.5 # inches
 detSize = (np.pi*detRad*detRad) / 1550
 
 bendRad = 0.3

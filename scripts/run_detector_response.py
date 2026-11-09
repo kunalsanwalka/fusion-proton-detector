@@ -17,38 +17,20 @@ import numpy as np
 import matplotlib.pyplot as plt
 
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from detector_instrument_function import generate_detector_response
+from detector_instrument_function import generate_detector_response, load_detector_geometry
 
 global plotDir
 plotDir = '/home/sanwalka/synthetic_proton_detector/plots/'
 
+# Detector geometry (positions, angles, sizes, bend radii and tube angles) saved by run_angle_optimization.py
+geometryFile = '/home/sanwalka/synthetic_proton_detector/data/optimal_angles_whamr_cdr.npz'
+
 def detector_geometry():
     """
-    Define the detector geometry (positions, angles, sizes, bend radii and tube angles)
+    Load the detector geometry (positions, angles, sizes, bend radii and tube angles)
     """
 
-    file = np.load('/home/sanwalka/synthetic_proton_detector/data/optimal_angles_whamr_cdr.npz')
-
-    # (x,y,z) positions. These are mounted on the CC inner wall.
-    zPosArr = file['zPosArr'] # meters
-    xPos = -25.905 * 1e-2
-    yPos = -0.235 * 1e-2
-    detPosArr = np.array([[xPos, yPos, zPos] for zPos in zPosArr]) # meters
-
-    # Detector angles (after optimization)
-    detPhiArr = file['optimalAngleArr'] * (np.pi/180) # radians
-
-    # Detector sizes
-    detRad = 1.0 # inches
-    detSizeArr = np.full(len(zPosArr), (np.pi*detRad*detRad) / 1550) # m^2
-
-    # Tube bend radii
-    bendRadArr = np.full(len(zPosArr), 1.2) # meters
-
-    # Tube sector angles
-    tubeAngArr = np.full(len(zPosArr), 10 * np.pi/180) # radians
-
-    return detPosArr, detPhiArr, detSizeArr, bendRadArr, tubeAngArr
+    return load_detector_geometry(geometryFile)
 
 def single_reactivity_response(filenameEqdsk, filenameReactivity,
                                makeplot=False, savename=''):

@@ -169,26 +169,9 @@ def plot_volume_weights(filenameEqdsk):
 
 def plot_detector_response(filenameEqdsk, filenameReactivity):
 
-    file = np.load('/home/sanwalka/synthetic_proton_detector/data/optimal_angles_5cm_spacing.npz')
-
-    # (x,y,z) positions. These are mounted on the CC inner wall.
-    zPosArr = file['zPosArr'] # meters
-    xPos = -0.257
-    yPos = 0.307
-    detPosArr = np.array([[xPos, yPos, zPos] for zPos in zPosArr]) # meters
-
-    # Detector angles (after optimization)
-    detPhiArr = file['optimalAngleArr'] * (np.pi/180) # radians
-
-    # Detector sizes
-    detRad = 1.0 # inches
-    detSizeArr = np.full(len(zPosArr), (np.pi*detRad*detRad) / 1550) # m^2
-
-    # Tube bend radii
-    bendRadArr = np.full(len(zPosArr), 1.2) # meters
-
-    # Tube sector angles
-    tubeAngArr = np.full(len(zPosArr), 10 * np.pi/180) # radians
+    # Detector geometry (positions, angles, sizes, bend radii and tube angles) saved by run_angle_optimization.py
+    geometryFile = '/home/sanwalka/synthetic_proton_detector/data/optimal_angles_5cm_spacing.npz'
+    detPosArr, detPhiArr, detSizeArr, bendRadArr, tubeAngArr = load_detector_geometry(geometryFile)
 
     detResponse = generate_detector_response(filenameEqdsk, filenameReactivity, detPosArr, detPhiArr, detSizeArr, bendRadArr, tubeAngArr,
                                             makeplot=True)

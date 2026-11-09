@@ -6,46 +6,20 @@ import numpy as np
 import xarray as xr
 import matplotlib.pyplot as plt
 
+plt.rcParams.update({'font.size': 18})
+
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from predicted_fusion_reactivity import *
-from detector_instrument_function import generate_detector_response
-
-def detector_geometry(geometryFile):
-    """
-    Load the detector geometry (positions, angles, sizes, bend radii and tube angles)
-    from the .npz saved by run_angle_optimization.py, so that the angles are always
-    used with the same geometry they were optimized for.
-    """
-
-    file = np.load(geometryFile)
-
-    requiredKeys = ['detPosArr', 'optimalAngleArr', 'detSizeArr', 'bendRadArr', 'tubeAngArr']
-    missingKeys = [key for key in requiredKeys if key not in file]
-    if missingKeys:
-        raise KeyError(f'{geometryFile} is missing {missingKeys}. '
-                       f'Re-run run_angle_optimization.py to save the full detector geometry.')
-
-    # (x,y,z) positions
-    detPosArr = file['detPosArr'] # meters
-
-    # Detector angles (after optimization)
-    detPhiArr = file['optimalAngleArr'] * (np.pi/180) # radians
-
-    # Detector sizes
-    detSizeArr = file['detSizeArr'] # m^2
-
-    # Tube bend radii
-    bendRadArr = file['bendRadArr'] # meters
-
-    # Tube sector angles
-    tubeAngArr = file['tubeAngArr'] # radians
-
-    return detPosArr, detPhiArr, detSizeArr, bendRadArr, tubeAngArr
+from detector_instrument_function import generate_detector_response, load_detector_geometry
 
 def calculate_2d_reactivity(filenameCQL3D, filenameEQDSK, savenameReactivity):
     """
     Calculate the 2D fusion reactivity profile from a CQL3D simulation.
     """
+
+    # Name the plot after the CQL3D run (the directory above 'simulation_results')
+    pathParts = os.path.normpath(filenameCQL3D).split(os.sep)
+    runName = pathParts[pathParts.index('simulation_results') - 1] if 'simulation_results' in pathParts else 'cql3d'
 
     startTime = time.time()
     vel, xsi, zArr2D, rArr2D, f_rz = cql3d_dist_func_rz(filenameCQL3D, filenameEQDSK)
@@ -54,7 +28,8 @@ def calculate_2d_reactivity(filenameCQL3D, filenameEQDSK, savenameReactivity):
 
     # Get the r-z evolved fusion reactivity profile
     zArr2D, rArr2D, reactivity2D = fusion_reactivity_rz(vel, xsi, zArr2D, rArr2D, f_rz,
-                                                        makeplot=False,
+                                                        makeplot=True,
+                                                        savefigname=f'{runName}_2d_reactivity.png',
                                                         savename=savenameReactivity)
     reactivityTime = time.time()
     print(f'Time taken to generate the reactivity = {np.round(reactivityTime - distFuncTime, 2)}s')
@@ -67,7 +42,7 @@ def run_full_flow(filenameCQL3D, filenameEQDSK, geometryFile, filenameReactivity
     """
 
     # Get the detector geometry
-    detPosArr, detPhiArr, detSizeArr, bendRadArr, tubeAngArr = detector_geometry(geometryFile)
+    detPosArr, detPhiArr, detSizeArr, bendRadArr, tubeAngArr = load_detector_geometry(geometryFile)
 
     # Generate the detector response
     # The plot is made below instead, alongside the density and reactivity
@@ -113,9 +88,9 @@ def run_full_flow(filenameCQL3D, filenameEQDSK, geometryFile, filenameReactivity
                 label=r'Reactivity [10$^{12}$ #/m$^3$s]')
 
         # Detector response
-        # [counts/s] to [100 counts/ms]
+        # [counts/s] to [10^5 counts/s]
         detLine, = ax.plot(detPosArr[:, 2], detResponse/1e5, linewidth=3,
-                           label='Response [100 counts/ms]')
+                           label=r'Response [10$^{5}$ #/s]')
         ax.scatter(detPosArr[:, 2], detResponse/1e5, s=200, color=detLine.get_color())
 
         ax.set_xlim(0, 0.8)
